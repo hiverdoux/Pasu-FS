@@ -1,0 +1,16 @@
+.build/
+.swiftpm/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+.DS_Store
+.env
+.env.*
+*.mobileprovision
+*.provisionprofile
+*.p12
+*.key
+*.pem
+*.zip
+Local/
+artifacts/
