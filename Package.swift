@@ -5,24 +5,45 @@ import PackageDescription
 let package = Package(
   name: "PasuFSPrototype",
   platforms: [
-    // This constrains only the prototype package, not the future product.
-    .macOS(.v11)
+    .macOS(.v14)
   ],
   products: [
     .library(name: "PasuFSPolicy", targets: ["PasuFSPolicy"]),
     .library(name: "PasuFSEndpointCore", targets: ["PasuFSEndpointCore"]),
+    .library(name: "PasuFSConfiguration", targets: ["PasuFSConfiguration"]),
+    .library(name: "PasuFSIPC", targets: ["PasuFSIPC"]),
+    .library(name: "PasuFSHostCore", targets: ["PasuFSHostCore"]),
     .executable(name: "es-integration-harness", targets: ["ESIntegrationHarness"]),
     .executable(name: "pasu-fs-host", targets: ["PasuFSHost"]),
+    .executable(name: "pasu-fs-app", targets: ["PasuFSApp"]),
     .executable(name: "pasu-fs-system-extension", targets: ["PasuFSSystemExtension"]),
   ],
   targets: [
     .target(name: "PasuFSPolicy"),
     .target(
+      name: "PasuFSConfiguration",
+      dependencies: ["PasuFSPolicy"]
+    ),
+    .target(
       name: "PasuFSEndpointCore",
-      dependencies: ["PasuFSPolicy"],
+      dependencies: ["PasuFSConfiguration", "PasuFSPolicy"],
       linkerSettings: [
         .linkedLibrary("EndpointSecurity"),
         .linkedLibrary("bsm"),
+      ]
+    ),
+    .target(
+      name: "PasuFSIPC",
+      dependencies: ["PasuFSConfiguration"],
+      linkerSettings: [
+        .linkedFramework("Security")
+      ]
+    ),
+    .target(
+      name: "PasuFSHostCore",
+      dependencies: ["PasuFSConfiguration", "PasuFSIPC"],
+      linkerSettings: [
+        .linkedFramework("SystemExtensions")
       ]
     ),
     .executableTarget(
@@ -31,14 +52,24 @@ let package = Package(
     ),
     .executableTarget(
       name: "PasuFSHost",
+      dependencies: ["PasuFSHostCore"]
+    ),
+    .executableTarget(
+      name: "PasuFSApp",
+      dependencies: ["PasuFSConfiguration", "PasuFSHostCore", "PasuFSIPC"],
       linkerSettings: [
-        .linkedFramework("SystemExtensions")
+        .linkedFramework("AppKit"),
+        .linkedFramework("SwiftUI"),
       ]
     ),
     .executableTarget(
       name: "PasuFSSystemExtension",
+      dependencies: [
+        "PasuFSConfiguration", "PasuFSEndpointCore", "PasuFSIPC", "PasuFSPolicy",
+      ],
       linkerSettings: [
-        .linkedLibrary("EndpointSecurity")
+        .linkedLibrary("EndpointSecurity"),
+        .linkedFramework("Security"),
       ]
     ),
     .testTarget(
@@ -48,6 +79,18 @@ let package = Package(
     .testTarget(
       name: "PasuFSEndpointCoreTests",
       dependencies: ["PasuFSEndpointCore"]
+    ),
+    .testTarget(
+      name: "PasuFSConfigurationTests",
+      dependencies: ["PasuFSConfiguration", "PasuFSPolicy"]
+    ),
+    .testTarget(
+      name: "PasuFSHostCoreTests",
+      dependencies: ["PasuFSConfiguration", "PasuFSHostCore"]
+    ),
+    .testTarget(
+      name: "PasuFSAppTests",
+      dependencies: ["PasuFSApp", "PasuFSConfiguration"]
     ),
   ]
 )

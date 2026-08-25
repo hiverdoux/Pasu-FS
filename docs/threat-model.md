@@ -1,20 +1,21 @@
 # Pasu FS Threat Model
 
-> **Document status:** Design-stage threat model; not an implementation or
-> security guarantee.
+> **Document status:** Threat model updated for the schema v2 multi-policy
+> implementation. Signed, provisioned end-to-end validation remains
+> incomplete. This document is not a release security guarantee.
 
 ## 1. Security objective
 
 Pasu FS has one primary security objective:
 
 > While its Endpoint Security enforcement component is active and healthy,
-> prevent unapproved applications running under the same macOS user identity
-> from completing supported new file operations within directories selected by
-> the user.
+> apply every matching Protection policy to supported file operations in
+> user-selected directories, denying when any Whitelist or Blacklist policy
+> requires it.
 
-An approved process may optionally become an allow root. When the user enables
-descendant inheritance, processes in the allow root's observed operating-system
-descendant tree receive the same directory access.
+A direct rule match may optionally become a rule root. When descendant
+inheritance is enabled, the root's observed operating-system descendant tree
+receives the same Whitelist allow or Blacklist deny effect.
 
 The objective is not to reproduce TCC or to protect against every actor capable
 of controlling the Mac.
@@ -39,9 +40,8 @@ unidentified same-user process into a protected directory.
 The in-scope adversary is a process that:
 
 - runs as the logged-in user, including a nonsandboxed third-party application;
-- is not directly allowed by the relevant Pasu FS rule;
-- is not an observed descendant of an allow root whose rule enables descendant
-  inheritance;
+- is not allowed by every matching Protection policy, or is explicitly matched
+  by a Blacklist rule;
 - can make ordinary filesystem calls available to that user; and
 - may know the protected path, the Pasu FS bundle identifiers, and the general
   policy design.
@@ -57,15 +57,14 @@ The design trusts:
 - the macOS kernel, Endpoint Security subsystem, code-signing enforcement, and
   other platform security mechanisms;
 - the currently running Pasu FS Endpoint Security extension and its validated
-  in-memory policy;
+  in-memory policy set;
 - the user who installs the extension, grants required approvals, and chooses
   process rules;
-- a process explicitly allowed by the user; and
-- all actual descendants of that process when descendant inheritance is enabled
-  for its rule.
+- each explicit program identity and policy type chosen by the user; and
+- the inherited effect on actual descendants when enabled for a rule.
 
-Trusting descendants is intentional. An allowed root that launches arbitrary
-code grants that code the inherited access described by the rule.
+Descendant propagation is intentional. A Whitelist root grants inherited access;
+a Blacklist root propagates inherited denial.
 
 ## 5. Preconditions for a protection claim
 
@@ -75,49 +74,49 @@ true:
 1. the system extension is installed and active;
 2. Endpoint Security client creation and event subscription succeeded;
 3. required macOS approvals, including Full Disk Access, are effective;
-4. a valid policy revision containing the directory is loaded;
+4. a valid policy-set revision with at least one matching Protection policy is loaded;
 5. the relevant operation has a supported authorization event on the deployed
    macOS version; and
 6. the extension can respond within the event deadline.
 
 If these conditions are not met, the UI must report `Stopped`, `Waiting`, or
-`Degraded`, not `Protecting`.
+`Degraded`, not `Enforcing supported opens`.
 
 ## 6. Threats and planned mitigations
 
 | ID | Threat | Planned mitigation | Residual risk |
 | --- | --- | --- | --- |
-| T1 | An unrelated same-user app opens a protected file for reading | Inspect `AUTH_OPEN` and deny requested read access unless a direct or inherited rule applies | Already-open descriptors and operations without an applicable authorization event are outside this protection |
+| T1 | An unrelated same-user app opens a protected file for reading | Inspect `AUTH_OPEN`; Whitelists deny non-matches, Blacklists deny matches, and every matching Protection policy must allow | Already-open descriptors and operations without an applicable authorization event are outside this protection |
 | T2 | An unrelated app opens or creates a file for modification | Deny disallowed requested flags in `AUTH_OPEN`; handle supported create and mutation authorization events | Individual later `write(2)` calls are not independently reauthorized |
 | T3 | A process impersonates an allowed app by copying its name or path | Match kernel-provided audit token and available code-signing facts; never trust display name or PID alone | Weak rules for unsigned tools remain visibly weaker; an allowed signed process may itself be compromised |
 | T4 | PID reuse causes a new process to inherit stale trust | Key runtime lineage by the PID and PID-version pair extracted from the audit token; follow exec version changes and remove records on exit | Event loss or an extension restart may make lineage incomplete, requiring conservative revalidation |
-| T5 | A descendant executes a different binary | Preserve inherited access only because the user explicitly enabled descendant inheritance; record the new executable for audit | The new binary remains trusted even if it would not qualify for a direct rule |
-| T6 | An unrelated instance of the same shell or interpreter seeks access | Inherited access requires an observed fork chain from an allow root, not merely the same executable identity | Brokered process creation may not form a literal descendant relationship |
+| T5 | A descendant executes a different binary | Preserve the inherited allow or deny effect only because the user explicitly enabled descendants; record the new executable for audit | The new binary keeps the inherited effect even if it would not qualify for a direct rule |
+| T6 | An unrelated instance of the same shell or interpreter seeks access | Inherited matching requires an observed fork chain from a rule root, not merely the same executable identity | Brokered process creation may not form a literal descendant relationship |
 | T7 | `launchd` or XPC launches a helper on behalf of an allowed app | Do not infer inherited trust without supported lineage evidence; require a direct rule when necessary | Some legitimate workflows may require additional user configuration |
 | T8 | A process escapes a protected path through rename, link, clone, copy, or symlink behavior | Inspect all available source and destination information and subscribe to relevant authorization events | Preexisting aliases, unsupported operations, ambiguous paths, and filesystem-specific behavior require empirical validation |
-| T9 | A same-user process tampers with policy or impersonates the host app | Store shared state in an access-controlled signed container; authenticate local IPC peers by kernel and code-signing identity; atomically load validated revisions | A compromised trusted host or platform component remains trusted |
-| T10 | Logging blocks authorization and causes missed deadlines | Use an in-memory decision path and a bounded asynchronous audit queue | Audit entries may be dropped; authorization behavior on platform-level deadline failure is version-dependent |
-| T11 | Audit records expose sensitive path information | Keep logs local, exclude file contents and unrelated activity, restrict storage, and provide retention controls | Filenames and process metadata can themselves be sensitive |
-| T12 | The extension stops while the UI still claims protection | Require extension health and ready-state confirmation before displaying `Protecting`; surface degraded and stopped states immediately | There may be a short unavoidable observation gap during failure detection |
-| T13 | A process floods the extension with events | Minimize subscriptions, use bounded constant-time lookups, monitor sequence gaps and latency, and shed nonessential audit work | Endpoint Security may still drop events or terminate an unhealthy client |
-| T14 | A malicious process sends policy commands directly to the extension | Authenticate the IPC peer and accept versioned complete policy revisions only from the signed Pasu FS host | Exploitation of a vulnerability in the trusted host or extension is out of scope for the rule engine |
+| T9 | A same-user process tampers with policy or impersonates the host app | Accept policy only over XPC constrained to the root-owned host app's designated requirement; persist accepted policy in a root-owned store with no-follow descriptor-relative writes | A compromised trusted host, administrator-modified app, or platform component remains trusted |
+| T10 | Logging blocks authorization and causes missed deadlines | Use an in-memory decision path and a 1,024-entry bounded asynchronous audit queue | Audit entries are dropped after the bound; authorization behavior on platform-level deadline failure is version-dependent |
+| T11 | Audit records expose sensitive path information | Keep root-owned logs local, exclude file contents and unrelated activity, expose recent entries through authenticated XPC, and cap plus rotate the file | Filenames and process metadata can themselves be sensitive; broader deletion controls remain incomplete |
+| T12 | The extension stops while the UI still claims protection | Require authenticated extension health and ready-state confirmation before displaying `Enforcing supported opens`; surface degraded and stopped states immediately | There may be a short unavoidable observation gap during failure detection |
+| T13 | A process floods the extension with events | Minimize subscriptions, bound the set to 64 policies/1,024 rules, monitor sequence gaps and latency, and shed nonessential audit work | Endpoint Security may still drop events or terminate an unhealthy client |
+| T14 | A malicious or incompatible process sends policy commands directly to the extension | Apply exact XPC code-signing requirements in both directions, perform a versioned nonce handshake, and accept only strict complete set revisions | The requirement is tied to the currently installed signed build and must be revalidated after every replacement |
 
 ## 7. Descendant-inheritance semantics
 
-The phrase **allow descendants** has a precise security meaning:
+The descendants checkbox has a precise security meaning:
 
-- the root process matches an explicit allow rule;
+- the root process matches an explicit enabled rule;
 - a child is inherited only after a kernel-observed process relationship;
 - inheritance continues through multiple observed generations;
-- `exec` does not remove inherited trust;
+- `exec` does not remove the inherited match;
 - an independent process with the same executable is not inherited;
 - a broker-launched helper is not inherited merely because it serves the same
   application; and
-- disabling the root rule prevents future authorization through that lineage.
+- disabling the root rule removes that lineage from future decisions.
 
-The user interface must disclose that enabling this option allows arbitrary
-programs launched by the root process. This is expected policy behavior, not a
-bypass of Pasu FS.
+The user interface must disclose that arbitrary programs launched by the root
+inherit the effect: access for a Whitelist and denial for a Blacklist. This is
+expected policy behavior, not a bypass of Pasu FS.
 
 ## 8. Explicit non-goals
 
@@ -160,11 +159,14 @@ An implementation must preserve these invariants:
    on the Endpoint Security authorization path.
 7. A truncated or ambiguous protected target never receives an optimistic allow
    from a path-only rule.
-8. The UI never reports `Protecting` without extension readiness and an active
+8. The UI never reports `Enforcing supported opens` without extension readiness and an active
    policy.
 9. Audit failure does not silently change the allow or deny result.
 10. Documentation never labels a planned or merely compiled protection as
     validated.
+11. A user-writable policy or status file never establishes active enforcement
+    or the UI's protection claim.
+12. Audit mode is displayed as monitoring and never as protection.
 
 ## 10. Validation requirements
 
@@ -189,6 +191,11 @@ least the following on each supported macOS version.
 - control requests from an unauthorized local process; and
 - ambiguous protected targets for which identity cannot be established safely.
 
+Signed multi-policy end-to-end validation must also attempt same-user
+modification of the persisted policy set and diagnostic status, a direct XPC
+request from unrelated code, set revision rollback/collision/UUID replacement,
+and replacement of a rule identity under the same rule ID.
+
 ### 10.3 Degraded-state behavior
 
 - missing Full Disk Access;
@@ -201,8 +208,8 @@ least the following on each supported macOS version.
 - policy persistence corruption.
 
 Test evidence must record the OS build, Pasu FS build, signed component
-identities, policy revision, operation performed, expected result, and observed
-result.
+identities, policy-set UUID/revision, operation performed, expected result, and
+observed result.
 
 ## 11. Privacy considerations
 

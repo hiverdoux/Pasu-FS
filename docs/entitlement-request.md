@@ -15,13 +15,13 @@ ready for external security review.
 
 ## Product purpose
 
-Pasu FS is a local macOS security utility that lets the Mac owner select an
-ordinary directory and explicitly choose which applications may perform
-supported new file operations within it.
+Pasu FS is a local macOS security utility that lets the Mac owner define named
+policies for ordinary directories and explicitly choose which signed
+applications are allowed or denied for supported file operations.
 
-The primary security objective is to prevent an unapproved application running
-under the same logged-in user identity from opening or modifying files in a
-selected directory while the enforcement component is active and healthy.
+The current security objective is to prevent an unapproved application running
+under the same logged-in user identity from opening files in a selected
+directory while the enforcement component is active and healthy.
 
 ## Why Endpoint Security is required
 
@@ -37,7 +37,7 @@ complete.
 
 ## Intended event use
 
-The current integration target implements:
+The current product extension and bounded integration target implement:
 
 - `AUTH_OPEN` for bounded read/write-intent authorization in a dedicated test
   directory;
@@ -45,10 +45,11 @@ The current integration target implements:
   and
 - exact Team ID and Signing ID rules with optional descendant inheritance.
 
-The product system extension will subscribe only to events required by active
-user policy. Additional create, rename, unlink, link, clone, truncate, mapping,
-or copy coverage will be claimed only after the corresponding authorization
-events have been implemented and validated on supported macOS versions.
+The product system extension subscribes only to events required by the current
+policy and lineage model. Additional create, rename, unlink, link, clone,
+truncate, mapping, or copy coverage will be claimed only after the
+corresponding authorization paths have been implemented and validated on
+supported macOS versions.
 
 ## Process identity and descendant policy
 
@@ -67,10 +68,11 @@ Policy evaluation is local and performs no network request. Pasu FS does not
 collect file contents, command output, environment variables, telemetry, or
 analytics for authorization decisions.
 
-Planned audit records are limited to locally stored metadata needed to explain
-a decision, such as timestamp, event type, requested flags, target path,
-process identity, and the applicable policy result. Retention controls will be
-completed before release. No audit data is uploaded to a cloud service.
+Audit records are limited to locally stored metadata needed to explain a
+decision, such as timestamp, event type, requested flags, target path, process
+identity, and the applicable per-policy results. The current JSONL store is
+capped at 10 MiB and rotates once; broader retention and deletion controls
+remain incomplete. No audit data is uploaded to a cloud service.
 
 ## User control and lifecycle
 
@@ -91,17 +93,25 @@ system-extension deactivation.
 
 This repository contains:
 
+- a SwiftUI menu-bar app for extension lifecycle, health, policy editing, and
+  local audit presentation;
+- strict schema v2 multi-policy configuration, authenticated XPC, and root-owned
+  policy and audit persistence contracts;
 - a synchronous policy and process-lineage core with automated tests;
-- an Endpoint Security adapter for selected lifecycle events and `AUTH_OPEN`;
-- a deliberately bounded integration harness for a non-system test directory;
-  and
-- a host and system-extension activation scaffold.
+- a product-shaped Endpoint Security extension that loads accepted policy sets,
+  subscribes to selected lifecycle events and `AUTH_OPEN`, and reports
+  authenticated runtime state; and
+- a deliberately bounded integration harness for a non-system test directory.
 
-The activation scaffold creates an Endpoint Security client but does not yet
-load policy or subscribe to events. The integration harness is not the product
-extension: it supports only `AUTH_OPEN`, and truncated paths or process-decode
-errors fail open to prevent a development test from becoming a system-wide
-policy engine.
+The integration harness is not the product extension. It supports only
+`AUTH_OPEN`, and truncated paths or process-decode errors fail open to prevent
+the integration target from becoming a system-wide policy engine. The product
+extension fails closed for ambiguous in-scope Protection decisions.
+
+The public checks establish source formatting, build success, property-list
+validity, and unit-test behavior. They do not establish entitlement approval,
+matching provisioning, system-extension activation, Full Disk Access, or a
+signed end-to-end product deployment.
 
 The repository does not claim protection for pre-opened file descriptors,
 individual later `read(2)` or `write(2)` calls, unsupported event types,

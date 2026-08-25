@@ -1,7 +1,8 @@
 # Pasu FS Architecture
 
-> **Document status:** Planned product architecture with an explicitly bounded
-> prototype implementation.
+> **Document status:** schema v2 multi-policy implementation architecture.
+> Source-level build and unit tests cover this revision. Signed, provisioned
+> end-to-end enforcement remains a separate validation requirement.
 
 ## 1. Purpose
 
@@ -9,24 +10,25 @@ Pasu FS is intended to add process-aware authorization to user-selected macOS
 directories that are not covered by a suitable existing privacy control. Its
 enforcement goal is deliberately narrow:
 
-> While the Pasu FS Endpoint Security client is active and healthy, deny
-> supported new file operations within protected directories unless the
-> requesting process is allowed directly or is an observed descendant of an
-> allowed process root.
+> While the Pasu FS Endpoint Security client is active and healthy, evaluate
+> every matching Protection policy for a supported file operation and deny when
+> any one of them denies. Audit policies record the same hypothetical result but
+> never affect the kernel response.
 
-This document describes the proposed component boundaries, policy model, event
-flow, process-lineage model, and validation requirements. Implemented prototype
-parts are identified separately from planned product behavior.
+This document describes the implemented component boundaries, policy model,
+event flow, process-lineage model, and validation requirements. Public source
+checks do not establish entitlement approval, system-extension activation, Full
+Disk Access, or signed end-to-end enforcement.
 
 ### Current prototype boundary
 
 The repository now contains a standalone Swift package that implements and
-tests the in-memory signing-identity and descendant-lineage policy model. An
-integration harness connects that core to selected Endpoint Security lifecycle
-events and `AUTH_OPEN` for a dedicated non-system test directory. A minimal host
-app plus system-extension scaffold covers activation and client creation only;
-it does not load policy, subscribe to events, or provide the planned product
-UI. See
+tests the in-memory signing-identity and descendant-lineage policy model, a
+bounded Endpoint Security integration harness, a SwiftUI menu-bar host, and a
+product-shaped system extension. The extension loads a strict policy-set
+document, subscribes to process lifecycle plus `AUTH_OPEN`, and reports
+authenticated runtime status. Other authorization event types remain planned,
+not implemented. See
 [`Current prototype`](../README.md#current-prototype) for the exact boundary and
 reproduction commands.
 
@@ -35,15 +37,15 @@ reproduction commands.
 1. **Additive authorization:** an Endpoint Security `ALLOW` decision never
    replaces POSIX permissions, TCC, App Sandbox, SIP, or other macOS controls.
    Pasu FS only adds another possible denial.
-2. **Default deny inside the selected scope:** while enforcement is healthy, an
-   in-scope operation from an unrecognized process is denied when the operation
-   has a supported authorization event.
+2. **Explicit list semantics:** a Whitelist allows matches and denies
+   non-matches; a Blacklist denies matches and allows non-matches. Every matching
+   Protection policy must allow the request.
 3. **Default allow outside the selected scope:** Pasu FS must avoid becoming a
    system-wide policy engine for paths the user did not select.
 4. **Stable process identity:** policy must not trust a PID, display name, or
    executable path by itself.
-5. **Explicit descendant trust:** descendant inheritance is enabled per allow
-   rule and has clear consequences visible to the user.
+5. **Explicit descendant effect:** descendant inheritance is enabled per rule
+   and inherits either Whitelist allow or Blacklist deny semantics.
 6. **Bounded authorization work:** the Endpoint Security handler performs only
    bounded in-memory operations and responds before the event deadline.
 7. **Asynchronous observability:** logging, persistence, and UI updates never
@@ -60,7 +62,7 @@ reproduction commands.
 - Requests installation, activation, update, and removal of the system
   extension.
 - Lets the user select protected directories and process identities.
-- Sends complete policy revisions to the extension over authenticated local
+- Sends complete policy-set revisions to the extension over authenticated local
   IPC.
 - Displays local audit metadata produced by the extension.
 - Never makes an allow or deny decision synchronously on behalf of an Endpoint
@@ -71,84 +73,100 @@ reproduction commands.
 - Bundle identifier: `com.dennis.pasu.fs.endpointsecurity`
 - Holds `com.apple.developer.endpoint-security.client` after Apple approval.
 - Creates and maintains the Endpoint Security client.
-- Subscribes only to the events required by the active policy and lineage
+- Subscribes only to the events required by active policies and lineage
   tracker.
-- Maintains an immutable in-memory policy snapshot.
-- Tracks allowed roots and their observed descendants.
+- Maintains an atomically replaceable in-memory policy-set snapshot.
+- Tracks matched rule roots and their observed descendants per policy.
 - Makes authorization decisions and responds before each deadline.
 - Sends audit metadata to a separate asynchronous persistence path.
 
-### 3.3 Shared policy and audit storage
+### 3.3 Policy and audit storage
 
-The host and extension require a signed, access-controlled mechanism for
-sharing policy and audit metadata. The planned design is an App Group container
-whose final identifier will be selected after the Apple Developer Team ID and
-provisioning configuration are confirmed.
+The host sends a complete schema v2 JSON policy set only over an XPC connection
+whose peers are constrained by their actual designated code requirements. The
+extension derives the host and CLI requirements from the installed,
+administrator-controlled app at `/Applications/Pasu FS.app`; the host derives
+the extension requirement from its sealed embedded system extension. There is
+no App Group or user-writable authoritative policy file.
 
-The stored policy is not authoritative until the extension validates and loads
+After validation, the extension persists the accepted policy set under the local
+system Application Support domain in a root-owned, non-group-writable directory.
+Writes use descriptor-relative temporary files, `O_NOFOLLOW`, `fsync`, and
+atomic rename. The host cannot write this store.
+
+The stored policy set is not authoritative until the extension validates and loads
 it. The authorization path reads only the in-memory snapshot, never the
 database or filesystem.
 
-Audit storage is append-oriented, bounded by a retention policy, and contains
-metadata rather than file contents. The exact database format and retention
-period remain undecided.
+Audit storage is append-oriented JSONL, limited to 10 MiB with one rotated file,
+and contains metadata rather than file contents. The host reads recent entries
+through authenticated XPC. The separately readable status file is diagnostic
+only and can never establish the UI's `Protecting` state.
 
 ## 4. High-level data flow
 
 ```text
-User changes a policy
+User changes one policy draft
         |
         v
-Pasu FS host validates the proposed rule
+Pasu FS host merges it into the latest active policy set
         |
         v
-Authenticated IPC sends a complete policy revision
+Mutually code-constrained XPC sends a complete set revision
         |
         v
 System extension validates identities, paths, and schema
         |
         v
-Atomic replacement of immutable in-memory policy snapshot
+Atomic replacement of all prepared in-memory policies
 
 
 Endpoint Security AUTH event
         |
         v
-Fast scope check: is the target protected?
+Fast scope check: which policies contain the target?
         | no                         | yes
         v                            v
-      ALLOW                  identify requester
+      ALLOW                  identify requester once
                                       |
-                        direct allow or descendant?
+                         evaluate each matching rule set
+                                      |
+                     every Protection policy allows?
                               | yes          | no
                               v              v
                             ALLOW           DENY
                               \              /
                                v            v
-                         asynchronous audit queue
+                  one asynchronous audit record with
+                       all per-policy evaluations
 ```
 
 ## 5. Policy model
 
-The exact serialization format is not yet selected. Conceptually, a policy
-revision contains the following objects.
+The serialization format is strict JSON schema version 2. A policy set has a
+stable UUID, monotonic `UInt64` revision, and up to 64 ordered directory policies.
+Each policy has its own stable UUID, display name, Protection or Audit mode,
+Whitelist or Blacklist type, one protected root, and exact program rules. The set
+contains at most 1,024 rules and remains below 1 MiB.
 
 ### 5.1 Protected directory
 
 ```text
-ProtectedDirectory
+DirectoryPolicy
   id
+  display name
+  Protection or Audit mode
+  Whitelist or Blacklist type
   user-visible path
-  resolved filesystem identity where available
-  enabled
-  rule references
+  rules
 ```
 
-A path string alone is not treated as a complete filesystem identity. The
-implementation will use the file information supplied by Endpoint Security and
-will conservatively handle truncated or ambiguous paths.
+A root is standardized, symbolic links are resolved, and comparisons are
+case-insensitive. The same normalized root+mode pair is rejected, while the same
+root with different modes and parent/child overlaps are allowed. Truncated or
+ambiguous event paths are handled conservatively.
 
-### 5.2 Process allow rule
+### 5.2 Program rule
 
 ```text
 ProcessRule
@@ -156,17 +174,21 @@ ProcessRule
   team identifier, when available
   signing identifier, when available
   code-signing requirements or flags
-  optional executable constraint
-  optional version-pinning constraint
-  allow descendants
+  inherit effect to observed descendants
   enabled
 ```
 
-The default identity strategy is expected to combine Team ID and Signing ID.
-An optional code-directory hash may provide strict version pinning, but it
-changes when an application is updated. Unsigned or ad-hoc-signed programs
-require an explicit, visibly weaker rule and will not be silently trusted by
-path or filename.
+The default identity strategy combines Team ID and Signing ID for non-platform
+programs. Apple platform programs use the kernel-supplied platform-binary flag
+plus an exact Signing ID, so a copied program cannot match merely by reusing an
+identifier string. Disabled rules remain editable but are omitted from the
+matcher and immediately lose retained lineage. Unsigned or ad-hoc-signed
+programs are not silently trusted by path or filename.
+
+For a Whitelist, a direct or inherited match allows and no match denies. For a
+Blacklist, a direct or inherited match denies and no match allows. Audit mode
+stores `wouldAllow`/`wouldDeny`; Protection stores `allow`/`deny` and participates
+in the all-matching-policies decision.
 
 ### 5.3 Runtime lineage record
 
@@ -175,9 +197,9 @@ LineageRecord
   process PID + PID version extracted from its audit token
   parent PID + PID version extracted from its audit token
   current full audit-token metadata
-  originating allow-rule ID
-  generation or policy-revision ID
-  inherited access state
+  originating policy UUID + rule ID
+  policy-set generation/revision
+  inherited match state
   lifecycle state
 ```
 
@@ -186,12 +208,12 @@ on observed process exit and invalidated when the relevant policy is revoked.
 
 ## 6. Process identity and descendant inheritance
 
-### 6.1 Allow roots
+### 6.1 Rule roots
 
-A process becomes an allow root when its current Endpoint Security process facts
-match an enabled user rule. A user may also approve a currently running process,
-but the extension must validate its audit token and code-signing facts before
-creating the runtime root.
+A process becomes a rule root when its current Endpoint Security process facts
+match an enabled rule whose descendants option is checked. The extension uses
+its audit token and kernel code-signing facts; UI names and paths do not establish
+the match.
 
 PID values alone are used only as display metadata because macOS reuses them.
 Runtime lineage uses the PID and PID-version pair extracted with libbsm's
@@ -201,19 +223,19 @@ lineage-map key.
 
 ### 6.2 Descendant propagation
 
-For a rule with `allow descendants` enabled:
+For a rule with descendants enabled:
 
-1. an observed `fork` from an allowed process creates an allowed child record;
-2. an `exec` by that child preserves inherited access while updating the
+1. an observed `fork` from a matched process creates a matched child record;
+2. an `exec` by that child preserves the inherited match while updating the
    child's executable and signing facts for auditing;
 3. further observed forks inherit the same originating rule;
 4. an observed exit removes the runtime record; and
 5. disabling or deleting the originating rule revokes its runtime lineage
    records for future authorization decisions.
 
-This policy intentionally trusts any actual descendant, even if it executes a
-different binary. That behavior matches the user-visible meaning of descendant
-inheritance and must be presented clearly before the option is enabled.
+This intentionally carries the rule effect across a different executed binary:
+Whitelist descendants remain allowed and Blacklist descendants remain blocked.
+That behavior must be presented clearly before the option is enabled.
 
 ### 6.3 What is not a descendant
 
@@ -232,22 +254,22 @@ establish the intended relationship through supported kernel-provided facts.
 
 An extension restart creates a lineage-observation gap. Pasu FS will not claim
 that a complete preexisting descendant tree can always be reconstructed.
-Until roots and descendants are revalidated, in-scope requests that cannot be
-attributed to an active allow rule are treated as unapproved.
+Until roots and descendants are observed again, they produce no inherited match.
+Each policy then applies its normal no-match semantics: deny for a Whitelist and
+allow for a Blacklist.
 
 ## 7. Planned Endpoint Security subscriptions
 
-The following table is an initial design target, not an implemented support
-matrix.
+The following table distinguishes the current implementation from later targets.
 
 | Purpose | Planned events | Intended use |
 | --- | --- | --- |
-| New file opens | `AUTH_OPEN` | Inspect requested read/write flags and allow or deny the supported open operation |
+| New file opens | `AUTH_OPEN` | **Implemented.** Inspect requested flags and allow or deny the supported open operation |
 | Namespace and content mutation | `AUTH_CREATE`, `AUTH_RENAME`, `AUTH_UNLINK`, `AUTH_LINK`, `AUTH_CLONE`, `AUTH_TRUNCATE` | Protect the source, destination, or both, as applicable |
 | New file mapping | `AUTH_MMAP` | Authorize supported new mappings; does not monitor later memory accesses |
 | Copy operation | `AUTH_COPYFILE`, where available | Protect source and destination for the corresponding supported operation |
 | Directory enumeration | `AUTH_READDIR`, where available and required | Restrict supported directory enumeration within protected scope |
-| Process lineage | `NOTIFY_FORK`, `NOTIFY_EXEC`, `NOTIFY_EXIT` and any required authorization counterparts | Maintain runtime root and descendant state |
+| Process lineage | `NOTIFY_FORK`, `NOTIFY_EXEC`, `NOTIFY_EXIT` | **Implemented.** Maintain per-policy rule roots and descendant state |
 | Audit context | Relevant matching `NOTIFY` events | Explain completed operations without delaying authorization |
 
 The implementation will gate subscriptions by the deployed macOS version and
@@ -279,37 +301,41 @@ subscribed event on every supported macOS release.
 The authorization handler follows a bounded sequence:
 
 1. verify that the message type and version are supported;
-2. check whether any source or destination is within a protected scope;
+2. collect every policy scope containing the target;
 3. allow immediately if the operation is entirely out of scope;
 4. identify the requesting process from the message's kernel-provided facts;
-5. look for a direct process rule or valid runtime lineage record;
-6. apply the event-specific decision, including requested open flags;
+5. look for a direct process rule or valid runtime lineage record in each policy;
+6. interpret Whitelist/Blacklist matches and require every Protection policy to allow;
 7. respond before the message deadline; and
 8. enqueue audit metadata without waiting for persistence or UI work.
 
 No network request, disk lookup, synchronous database transaction, code-signing
 network validation, or UI prompt is permitted on this path.
 
-For an in-scope event, ambiguity about the requesting process, target, policy
-revision, or truncated path produces a denial while the enforcement engine is
-otherwise healthy. Unsupported operations are reported as uncovered rather
-than silently claimed as protected.
+For an event matching at least one Protection policy, ambiguity about the
+requesting process or a truncated in-scope path produces a fail-closed denial.
+Audit-only matches never deny. Unsupported operations are reported as uncovered
+rather than silently claimed as protected.
 
 ## 10. IPC and policy integrity
 
-The extension must authenticate every control connection using kernel-provided
-peer identity and a designated code requirement. A process does not gain policy
-control merely because it runs as the same user or knows the IPC service name.
+The extension authenticates every control connection with Foundation's XPC code
+signing requirement checks. A process does not gain policy control merely
+because it runs as the same user or knows the Mach service name. The host also
+constrains replies to the embedded extension's designated requirement and
+completes a nonce handshake before sending policy.
 
-Policy updates are complete, versioned replacements rather than a stream of
-partially applied edits. The extension validates:
+Policy-set updates are complete, versioned replacements rather than a stream of
+partially applied edits. A versioned handshake rejects mixed v1/v2 host and
+extension control protocols. The extension validates:
 
 - schema version and size limits;
-- protected-directory validity;
+- set/policy UUIDs, unique names, revision, policy/rule count and size limits;
+- protected-directory validity and duplicate mode+directory pairs;
 - process-rule identity fields;
 - duplicate and conflicting rule identifiers;
 - the sender's signed identity; and
-- monotonic policy revision where applicable.
+- monotonic set revision and stable set UUID.
 
 After validation, the extension atomically swaps the immutable in-memory
 snapshot. An invalid update leaves the previous valid snapshot active.
@@ -319,13 +345,14 @@ snapshot. An invalid update leaves the previous valid snapshot active.
 An audit entry is expected to contain only the metadata required to explain a
 decision, such as:
 
-- timestamp and policy revision;
-- allow or deny result and reason;
+- timestamp and policy-set UUID/revision;
+- final kernel result and aggregate reason;
 - event type and requested access flags;
 - target path as supplied by the supported event, with truncation status;
 - process audit-token-derived identifiers;
 - executable path and available code-signing facts;
-- direct-rule or inherited-rule identifier; and
+- every matching policy's UUID, recorded name, mode, type, direct/inherited
+  rule match, and actual or hypothetical decision; and
 - sequence-gap or health warnings.
 
 File contents, command output, environment values, and unrelated filesystem
@@ -337,31 +364,36 @@ events and detected gaps; they are not represented as complete forensic proof.
 
 ## 12. Lifecycle and user-visible health
 
-The host app will expose at least these states:
+The host app exposes at least these states:
 
 ```text
 Not installed
 Waiting for system-extension approval
 Waiting for Full Disk Access
 Starting
-Protecting
+No policies configured (revision)
+Enforcing Protection policies (revision and counts)
+Monitoring Audit policies (revision and counts)
 Degraded
 Stopped
 ```
 
-`Protecting` is shown only after the extension has connected, loaded a valid
-policy, subscribed successfully, and reported ready. The UI must not claim that
-directories are protected while the extension is stopped or degraded.
+`Enforcing Protection policies` is shown only after the extension has connected,
+loaded a valid nonempty set containing Protection, subscribed successfully, and
+reported ready over authenticated XPC. An Audit-only set is shown as Monitoring,
+and an accepted empty set as Idle. A diagnostic file without authenticated XPC produces
+`Degraded`, even if the file claims enforcement.
 
 ## 13. Verification strategy
 
 ### 13.1 Policy-engine tests
 
-- direct allow and direct deny;
+- all Whitelist/Blacklist match and no-match combinations;
+- overlapping Protection deny-wins and Audit non-interference;
 - read-only and write-intent open decisions;
 - protected and unprotected paths;
 - source/destination boundary decisions;
-- rule revision and revocation;
+- rule disable/delete/type-change revision and lineage revocation;
 - unsigned and updated binaries; and
 - malformed or ambiguous input.
 
@@ -392,7 +424,7 @@ directories are protected while the extension is stopped or degraded.
 - event bursts and sequence gaps;
 - authorization latency against real deadlines;
 - extension crash and restart;
-- invalid policy updates;
+- invalid set updates, mixed handshake versions, and schema v1 retirement;
 - audit-storage failure;
 - host app termination; and
 - extension update and removal.
@@ -401,10 +433,10 @@ directories are protected while the extension is stopped or degraded.
 
 The following items remain intentionally undecided:
 
-- minimum supported macOS version;
-- final App Group identifier and persistence format;
-- audit retention defaults and maximum size;
-- whether any authorization results may be cached for protected paths;
+- production Team ID signing and provisioning configuration;
+- audit retention beyond the current 10 MiB plus one-file rotation;
+- whether any authorization results may be cached for protected paths (the current
+  implementation always responds with `cache: false`);
 - the exact identity options exposed for unsigned programs;
 - adoption strategy for version-specific deadline-miss behavior; and
 - the final installation, update, and uninstallation user experience.

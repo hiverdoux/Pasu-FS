@@ -77,7 +77,8 @@ public enum EndpointDecoder {
         processVersion: Int32(audit_token_to_pidversion(process.audit_token))
       ),
       teamIdentifier: string(process.team_id),
-      signingIdentifier: string(process.signing_id)
+      signingIdentifier: string(process.signing_id),
+      isPlatformBinary: process.is_platform_binary
     )
 
     return EndpointProcessSnapshot(

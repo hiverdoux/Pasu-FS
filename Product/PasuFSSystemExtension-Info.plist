@@ -15,12 +15,16 @@
 	<key>CFBundlePackageType</key>
 	<string>SYSX</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1</string>
+	<string>0.2</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>8</string>
 	<key>LSMinimumSystemVersion</key>
-	<string>11.0</string>
+	<string>14.0</string>
+	<key>NSEndpointSecurityMachServiceName</key>
+	<string>com.dennis.pasu.fs.endpointsecurity.xpc</string>
 	<key>NSSystemExtensionUsageDescription</key>
-	<string>Pasu FS uses Endpoint Security to authorize supported file operations in user-selected directories.</string>
+	<string>Pasu FS uses Endpoint Security to authorize supported file operations in user-selected test directories.</string>
+	<key>PasuFSExpectedHostApplicationPath</key>
+	<string>/Applications/Pasu FS.app</string>
 </dict>
 </plist>

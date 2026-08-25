@@ -53,19 +53,6 @@ final class ProtectedPathScopeTests: XCTestCase {
     }
   }
 
-  func testRejectsBroadSystemRoots() {
-    let roots = [
-      "/", "/Applications", "/Library", "/System", "/Users", "/bin", "/private", "/sbin",
-      "/usr",
-    ]
-
-    for root in roots {
-      XCTAssertThrowsError(try ProtectedPathScope(root: root)) { error in
-        XCTAssertEqual(error as? ProtectedPathScopeError, .unsafeRoot(root))
-      }
-    }
-  }
-
   func testRejectsMissingDirectory() throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.base) }

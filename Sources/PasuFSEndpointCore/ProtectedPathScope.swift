@@ -15,7 +15,7 @@ public enum ProtectedPathScopeError: Error, Equatable, CustomStringConvertible {
     case .pathIsNotDirectory(let path):
       "The protected root is not a directory: \(path)"
     case .unsafeRoot(let path):
-      "The protected root is too broad for the integration harness: \(path)"
+      "The protected root is too broad for the development harness: \(path)"
     }
   }
 }
@@ -62,7 +62,10 @@ public struct ProtectedPathScope: Equatable, Sendable {
   }
 
   private static func standardize(_ path: String) -> String {
-    URL(fileURLWithPath: path).standardizedFileURL.path
+    URL(fileURLWithPath: path)
+      .standardizedFileURL
+      .resolvingSymlinksInPath()
+      .path
   }
 
   private static func comparisonKey(_ path: String) -> String {

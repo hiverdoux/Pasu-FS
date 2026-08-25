@@ -38,22 +38,24 @@ public struct ProcessFacts: Equatable, Sendable {
   public let processInstance: ProcessInstanceKey
   public let teamIdentifier: String?
   public let signingIdentifier: String?
+  public let isPlatformBinary: Bool
 
   public init(
     auditToken: AuditTokenKey,
     processInstance: ProcessInstanceKey,
     teamIdentifier: String?,
-    signingIdentifier: String?
+    signingIdentifier: String?,
+    isPlatformBinary: Bool = false
   ) {
     self.auditToken = auditToken
     self.processInstance = processInstance
     self.teamIdentifier = teamIdentifier
     self.signingIdentifier = signingIdentifier
+    self.isPlatformBinary = isPlatformBinary
   }
 }
 
-/// The first prototype supports an exact Team ID and Signing ID pair. Future
-/// prototypes may add explicit unsigned-program and version-pinning policies.
+/// Identifies a non-platform program by its exact Team ID and Signing ID pair.
 public struct SignedProgramIdentity: Hashable, Sendable {
   public let teamIdentifier: String
   public let signingIdentifier: String
@@ -64,14 +66,33 @@ public struct SignedProgramIdentity: Hashable, Sendable {
   }
 
   fileprivate func matches(_ process: ProcessFacts) -> Bool {
-    process.teamIdentifier == teamIdentifier
+    !process.isPlatformBinary
+      && process.teamIdentifier == teamIdentifier
       && process.signingIdentifier == signingIdentifier
+  }
+}
+
+/// The kernel-supplied code-signing identity used by one direct allow rule.
+/// Platform binaries are deliberately distinct from Team ID-signed programs;
+/// a copied binary cannot match merely by reusing a signing identifier string.
+public enum ProgramIdentity: Hashable, Sendable {
+  case teamSigned(SignedProgramIdentity)
+  case platformBinary(signingIdentifier: String)
+
+  fileprivate func matches(_ process: ProcessFacts) -> Bool {
+    switch self {
+    case .teamSigned(let identity):
+      identity.matches(process)
+    case .platformBinary(let signingIdentifier):
+      process.isPlatformBinary
+        && process.signingIdentifier == signingIdentifier
+    }
   }
 }
 
 public struct AllowRule: Hashable, Sendable {
   public let id: String
-  public let program: SignedProgramIdentity
+  public let identity: ProgramIdentity
   public let allowsDescendants: Bool
 
   public init(
@@ -79,8 +100,20 @@ public struct AllowRule: Hashable, Sendable {
     program: SignedProgramIdentity,
     allowsDescendants: Bool
   ) {
+    self.init(
+      id: id,
+      identity: .teamSigned(program),
+      allowsDescendants: allowsDescendants
+    )
+  }
+
+  public init(
+    id: String,
+    identity: ProgramIdentity,
+    allowsDescendants: Bool
+  ) {
     self.id = id
-    self.program = program
+    self.identity = identity
     self.allowsDescendants = allowsDescendants
   }
 }
@@ -93,7 +126,7 @@ public struct PolicySnapshot: Equatable, Sendable {
   }
 
   fileprivate func directRule(for process: ProcessFacts) -> AllowRule? {
-    rules.first { $0.program.matches(process) }
+    rules.first { $0.identity.matches(process) }
   }
 
   fileprivate func rule(id: String) -> AllowRule? {
@@ -107,9 +140,19 @@ public enum AuthorizationDecision: Equatable, Sendable {
   case denied
 }
 
-/// A synchronous, in-memory prototype for direct allow rules and descendant
-/// inheritance. It has no filesystem access and contains no Endpoint Security
-/// callbacks; those boundaries are intentional at this stage.
+/// Describes whether a process matched a configured program identity. The
+/// caller decides whether a match means allow (whitelist) or deny (blacklist).
+public enum RuleMatch: Equatable, Sendable {
+  case direct(ruleID: String)
+  case inherited(ruleID: String)
+  case none
+}
+
+/// A synchronous, in-memory matcher for direct program identities and observed
+/// descendant inheritance. It has no filesystem access and does not assign an
+/// allow/deny meaning to a match; policy type interpretation stays with the
+/// caller. `decision(for:)` remains as the single-whitelist compatibility API
+/// used by the development harness.
 public struct PolicyEvaluator: Sendable {
   private var policy: PolicySnapshot
   private var inheritedRuleByProcess: [ProcessInstanceKey: String] = [:]
@@ -121,11 +164,14 @@ public struct PolicyEvaluator: Sendable {
   /// Replaces the policy atomically from the evaluator's perspective and
   /// discards runtime lineage whose originating rule no longer permits it.
   public mutating func replacePolicy(with newPolicy: PolicySnapshot) {
+    let previousPolicy = policy
     policy = newPolicy
 
     let inheritableRuleIDs = Set(
       newPolicy.rules.lazy
-        .filter(\.allowsDescendants)
+        .filter { rule in
+          rule.allowsDescendants && previousPolicy.rule(id: rule.id) == rule
+        }
         .map(\.id)
     )
 
@@ -196,17 +242,28 @@ public struct PolicyEvaluator: Sendable {
     inheritedRuleByProcess.removeValue(forKey: process)
   }
 
-  public func decision(for process: ProcessFacts) -> AuthorizationDecision {
+  public func match(for process: ProcessFacts) -> RuleMatch {
     if let directRule = policy.directRule(for: process) {
-      return .allowedDirect(ruleID: directRule.id)
+      return .direct(ruleID: directRule.id)
     }
 
     guard let inheritedRuleID = inheritedRuleByProcess[process.processInstance],
       policy.rule(id: inheritedRuleID)?.allowsDescendants == true
     else {
-      return .denied
+      return .none
     }
 
-    return .allowedInherited(ruleID: inheritedRuleID)
+    return .inherited(ruleID: inheritedRuleID)
+  }
+
+  public func decision(for process: ProcessFacts) -> AuthorizationDecision {
+    switch match(for: process) {
+    case .direct(let ruleID):
+      .allowedDirect(ruleID: ruleID)
+    case .inherited(let ruleID):
+      .allowedInherited(ruleID: ruleID)
+    case .none:
+      .denied
+    }
   }
 }
