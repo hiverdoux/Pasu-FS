@@ -130,10 +130,12 @@ public actor ExtensionControlClient {
       )
       newConnection.setCodeSigningRequirement(requirement)
       newConnection.invalidationHandler = { [weak self] in
-        Task { await self?.invalidate() }
+        guard let client = self else { return }
+        Task { await client.invalidate() }
       }
       newConnection.interruptionHandler = { [weak self] in
-        Task { await self?.invalidate() }
+        guard let client = self else { return }
+        Task { await client.invalidate() }
       }
       newConnection.activate()
       connection = newConnection
