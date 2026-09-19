@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key>
+	<string>Pasu FS Endpoint Security</string>
+	<key>CFBundleExecutable</key>
+	<string>pasu-fs-system-extension</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.example.pasu.fs.endpointsecurity</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Pasu FS Endpoint Security</string>
+	<key>CFBundlePackageType</key>
+	<string>SYSX</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.6</string>
+	<key>CFBundleVersion</key>
+	<string>27</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>NSEndpointSecurityMachServiceName</key>
+	<string>com.example.pasu.fs.endpointsecurity.xpc</string>
+	<key>NSSystemExtensionUsageDescription</key>
+	<string>Pasu FS uses Endpoint Security to authorize supported file operations in user-selected test directories.</string>
+	<key>PasuFSExpectedHostApplicationPath</key>
+	<string>/Applications/Pasu FS.app</string>
+</dict>
+</plist>

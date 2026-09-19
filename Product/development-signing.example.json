@@ -1,0 +1,5 @@
+{
+  "appBundleIdentifier": "com.example.pasu.fs",
+  "hostProfile": ".local/signing/sample-host.provisionprofile",
+  "extensionProfile": ".local/signing/sample-extension.provisionprofile"
+}

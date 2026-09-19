@@ -1,0 +1,9 @@
+/.local/
+.build/
+.swiftpm/
+.DS_Store
+*.provisionprofile
+*.mobileprovision
+*.p12
+*.pfx
+*.key
