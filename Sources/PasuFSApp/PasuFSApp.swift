@@ -19,7 +19,11 @@ private enum PasuFSApplicationEntry {
 
 struct PasuFSApp: App {
   @NSApplicationDelegateAdaptor(AppWindowLifecycle.self) private var windowLifecycle
-  @State private var model = AppModel()
+  @State private var model: AppModel
+
+  init() {
+    _model = State(initialValue: AppModel())
+  }
 
   var body: some Scene {
     Window("Pasu FS", id: "main") {
