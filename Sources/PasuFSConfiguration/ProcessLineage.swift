@@ -253,8 +253,12 @@ extension AuditEventRecord {
   }
 
   public var estimatedByteCount: Int {
-    1_024 + (executablePath?.utf8.count ?? 0) + (targetPath?.utf8.count ?? 0)
-      + (detail?.utf8.count ?? 0) + (policyEvaluations?.count ?? 0) * 1_024
-      + (processLineage?.estimatedByteCount ?? 0)
+    var byteCount = 1_024
+    byteCount += executablePath?.utf8.count ?? 0
+    byteCount += targetPath?.utf8.count ?? 0
+    byteCount += detail?.utf8.count ?? 0
+    byteCount += (policyEvaluations?.count ?? 0) * 1_024
+    byteCount += processLineage?.estimatedByteCount ?? 0
+    return byteCount
   }
 }
