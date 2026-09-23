@@ -27,6 +27,8 @@ public struct LineageProcess: Codable, Equatable, Sendable, Identifiable {
   public var originalParentPID: Int32?
   public var observedAt: Date?
   public var exitedAt: Date?
+  public var supersededObservedAt: Date?
+  public var supersededBy: LineageProcessKey?
   public var id: String { key.id }
 
   public init(
@@ -35,7 +37,8 @@ public struct LineageProcess: Codable, Equatable, Sendable, Identifiable {
     teamIdentifier: String? = nil, codeSigningFlags: UInt32? = nil,
     isPlatformBinary: Bool? = nil, startTime: Date? = nil,
     parent: LineageProcessKey? = nil, responsible: LineageProcessKey? = nil,
-    originalParentPID: Int32? = nil, observedAt: Date? = nil, exitedAt: Date? = nil
+    originalParentPID: Int32? = nil, observedAt: Date? = nil, exitedAt: Date? = nil,
+    supersededObservedAt: Date? = nil, supersededBy: LineageProcessKey? = nil
   ) {
     self.key = key
     self.executablePath = executablePath
@@ -50,6 +53,8 @@ public struct LineageProcess: Codable, Equatable, Sendable, Identifiable {
     self.originalParentPID = originalParentPID
     self.observedAt = observedAt
     self.exitedAt = exitedAt
+    self.supersededObservedAt = supersededObservedAt
+    self.supersededBy = supersededBy
   }
 
   public var displayName: String {
@@ -61,7 +66,7 @@ public struct LineageProcess: Codable, Equatable, Sendable, Identifiable {
   }
 
   public var estimatedByteCount: Int {
-    512 + (executablePath?.utf8.count ?? 0) + (signingIdentifier?.utf8.count ?? 0)
+    544 + (executablePath?.utf8.count ?? 0) + (signingIdentifier?.utf8.count ?? 0)
       + (teamIdentifier?.utf8.count ?? 0)
   }
 }
@@ -134,6 +139,10 @@ public struct LineageIssue: Codable, Equatable, Sendable, Identifiable {
     case "kernelEventLoss":
       "macOS event delivery contained gaps. Unobserved transitions cannot be reconstructed."
     case "queueOverflow": "The process-history queue could not accept some observations."
+    case "historyOmitted":
+      "Process history was omitted to preserve the access record under load."
+    case "historyBudgetExceeded":
+      "Process history could not fit within the pending-work budget."
     case "resourceLimit":
       "The process-history data budget was exhausted; some observations could not be retained."
     case "decodeError": "Some process event fields could not be decoded."
@@ -208,18 +217,21 @@ public struct ProcessLineageStatus: Codable, Equatable, Sendable {
   public var observedEventCount: UInt64
   public var retainedProcessCount: Int
   public var retainedDataBytes: Int
+  public var reclamation: ReclamationMetrics?
   public var issues: [LineageIssue]
 
   public init(
     isTracking: Bool = false, collectionStartedAt: Date = Date(),
     observedEventCount: UInt64 = 0, retainedProcessCount: Int = 0,
-    retainedDataBytes: Int = 0, issues: [LineageIssue] = [], deliveryAccountingVersion: Int? = 1
+    retainedDataBytes: Int = 0, issues: [LineageIssue] = [], deliveryAccountingVersion: Int? = 1,
+    reclamation: ReclamationMetrics? = nil
   ) {
     self.isTracking = isTracking
     self.collectionStartedAt = collectionStartedAt
     self.observedEventCount = observedEventCount
     self.retainedProcessCount = retainedProcessCount
     self.retainedDataBytes = retainedDataBytes
+    self.reclamation = reclamation
     self.issues = issues
     self.deliveryAccountingVersion = deliveryAccountingVersion
   }

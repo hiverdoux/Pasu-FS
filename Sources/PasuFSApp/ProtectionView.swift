@@ -402,6 +402,17 @@ struct ProtectionView: View {
           Text(warning).font(.caption).foregroundStyle(.orange)
         }
       }
+      if let delivery = model.auditDeliveryMetrics {
+        LabeledContent(
+          "Audit records saved without full history", value: "\(delivery.minimalRecordsStored)")
+        LabeledContent("Audit admission drops", value: "\(delivery.admissionDrops)")
+        LabeledContent("Audit storage failures", value: "\(delivery.storageFailures)")
+      }
+      if let responses = model.authorizationMetrics {
+        LabeledContent("Authorization response failures", value: "\(responses.failures)")
+        LabeledContent(
+          "Responses completed at or after deadline", value: "\(responses.deadlineExceeded)")
+      }
       LabeledContent("Dropped audit events") {
         Text("\(model.droppedAuditEventCount)")
           .foregroundStyle(model.droppedAuditEventCount > 0 ? Color.orange : Color.secondary)

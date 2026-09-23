@@ -121,14 +121,16 @@ public final class JSONLineEventLogger: EndpointEventSink, @unchecked Sendable {
   }
 
   // Used only by the bounded audit router's worker queue, never the ES callback.
-  func recordSynchronously(_ event: EndpointEventRecord) {
+  @discardableResult
+  func recordSynchronously(_ event: EndpointEventRecord) -> Bool {
     queue.sync {
-      guard !state.withLock({ $0.isClosed }) else { return }
-      write(event)
+      guard !state.withLock({ $0.isClosed }) else { return false }
+      return write(event)
     }
   }
 
-  private func write(_ event: EndpointEventRecord) {
+  @discardableResult
+  private func write(_ event: EndpointEventRecord) -> Bool {
     do {
       let encoder = JSONEncoder()
       encoder.dateEncodingStrategy = .iso8601
@@ -140,11 +142,13 @@ public final class JSONLineEventLogger: EndpointEventSink, @unchecked Sendable {
       data.append(0x0A)
       try rotateIfNeeded(addingByteCount: data.count)
       try writeAll(data)
+      return true
     } catch {
       state.withLock { state in
         state.droppedEventCount &+= 1
         state.lastErrorDescription = String(describing: error)
       }
+      return false
     }
   }
 

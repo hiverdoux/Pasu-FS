@@ -243,6 +243,16 @@ final class PolicyAuditLogStoreTests: XCTestCase {
     }
   }
 
+  func testAdmissionDropCountsOneEventAndEachAffectedPolicyOnce() throws {
+    try withStore { store, _, document in
+      let ids = document.policies.map(\.id)
+      store.recordAdmissionDrop(record(document, sequence: 1, policies: ids))
+      XCTAssertEqual(store.droppedEventCount, 1)
+      XCTAssertEqual(store.deliveryMetrics.admissionDrops, 1)
+      for id in ids { XCTAssertEqual(try read(store, document, id).droppedEventCount, 1) }
+    }
+  }
+
   private func withStore(
     maximumFileSize: Int64 = 10 * 1_024 * 1_024,
     _ body: (PolicyAuditLogStore, URL, PolicySetDocument) throws -> Void

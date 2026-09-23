@@ -33,6 +33,8 @@ public struct ExtensionStatusSnapshot: Codable, Equatable, Sendable {
   public var coveredAuthorizationEvents: [String]
   public var processLineageStatus: ProcessLineageStatus?
   public var droppedAuditEventCount: UInt64
+  public var auditDelivery: AuditDeliveryMetrics?
+  public var authorization: AuthorizationMetrics?
 
   public init(
     schemaVersion: Int = Self.currentSchemaVersion,
@@ -54,7 +56,8 @@ public struct ExtensionStatusSnapshot: Codable, Equatable, Sendable {
     timestamp: Date = Date(),
     coveredAuthorizationEvents: [String] = ["AUTH_OPEN"],
     processLineageStatus: ProcessLineageStatus? = nil,
-    droppedAuditEventCount: UInt64 = 0
+    droppedAuditEventCount: UInt64 = 0,
+    auditDelivery: AuditDeliveryMetrics? = nil, authorization: AuthorizationMetrics? = nil
   ) {
     self.schemaVersion = schemaVersion
     self.runtimeInstanceIdentifier = runtimeInstanceIdentifier
@@ -77,6 +80,8 @@ public struct ExtensionStatusSnapshot: Codable, Equatable, Sendable {
     self.coveredAuthorizationEvents = coveredAuthorizationEvents
     self.processLineageStatus = processLineageStatus
     self.droppedAuditEventCount = droppedAuditEventCount
+    self.auditDelivery = auditDelivery
+    self.authorization = authorization
   }
 }
 

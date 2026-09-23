@@ -58,7 +58,8 @@ public enum EndpointDecoder {
     var result = LineageObservation(
       eventType: type, timestamp: timestamp,
       sequence: message.version >= 2 ? message.seq_num : nil,
-      globalSequence: message.version >= 4 ? message.global_seq_num : nil
+      globalSequence: message.version >= 4 ? message.global_seq_num : nil,
+      machTime: message.mach_time
     )
     if message.version < 4 { result.issues.append("versionUnavailable") }
     do {

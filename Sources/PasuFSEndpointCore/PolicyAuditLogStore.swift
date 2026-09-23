@@ -11,11 +11,12 @@ public enum PolicyAuditLogStoreError: Error, CustomStringConvertible {
 
 /// A bounded, nonblocking event sink. All file operations and policy retirement
 /// are serialized on its worker queue; the kernel response never waits for disk.
-public final class PolicyAuditLogStore: EndpointEventSink, @unchecked Sendable {
+public final class PolicyAuditLogStore: ReservedEndpointEventSink, @unchecked Sendable {
   private struct State {
     var isClosed = false
     var allowedKeys: Set<PolicyAuditLogKey> = []
     var droppedEventCount: UInt64 = 0
+    var delivery = AuditDeliveryMetrics()
     var policyDrops: [PolicyAuditLogKey: UInt64] = [:]
   }
 
@@ -28,7 +29,6 @@ public final class PolicyAuditLogStore: EndpointEventSink, @unchecked Sendable {
   private let maximumFileSize: Int64
   private var allowedKeys: Set<PolicyAuditLogKey> = []
   private var writers: [PolicyAuditLogKey: JSONLineEventLogger] = [:]
-  private var creationDrops: [PolicyAuditLogKey: UInt64] = [:]
   private var creationErrors: [PolicyAuditLogKey: String] = [:]
   private var cleanupWarning: String?
 
@@ -55,7 +55,7 @@ public final class PolicyAuditLogStore: EndpointEventSink, @unchecked Sendable {
   deinit { flushAndClose() }
 
   public var droppedEventCount: UInt64 {
-    state.withLock { $0.droppedEventCount } &+ global.droppedEventCount
+    state.withLock { $0.droppedEventCount }
   }
 
   public var lastErrorDescription: String? {
@@ -77,7 +77,6 @@ public final class PolicyAuditLogStore: EndpointEventSink, @unchecked Sendable {
       for key in Array(writers.keys) where !allowedKeys.contains(key) {
         writers.removeValue(forKey: key)?.flushAndClose()
       }
-      creationDrops = creationDrops.filter { allowedKeys.contains($0.key) }
       creationErrors = creationErrors.filter { allowedKeys.contains($0.key) }
       var failures: [String] = []
       do {
@@ -97,6 +96,8 @@ public final class PolicyAuditLogStore: EndpointEventSink, @unchecked Sendable {
     }
   }
 
+  public var deliveryMetrics: AuditDeliveryMetrics { state.withLock { $0.delivery } }
+
   public func record(_ original: EndpointEventRecord) {
     let event: EndpointEventRecord
     do {
@@ -105,28 +106,72 @@ public final class PolicyAuditLogStore: EndpointEventSink, @unchecked Sendable {
         ? try JSONLineEventLogger.recordWithinLimit(original, maximumBytes: maximumFileSize)
         : original
     } catch {
-      state.withLock { state in
-        state.droppedEventCount &+= 1
-        for key in Self.keys(for: original) where state.allowedKeys.contains(key) {
-          state.policyDrops[key, default: 0] &+= 1
-        }
-      }
+      recordStorageDrop(original)
       return
     }
-    let bytes = event.estimatedByteCount
+    guard let reservation = budget.reserve(bytes: event.estimatedByteCount) else {
+      recordAdmissionDrop(event)
+      return
+    }
+    record(event, reservation: reservation)
+  }
+
+  private func recordStorageDrop(_ event: EndpointEventRecord) {
+    state.withLock {
+      $0.delivery.storageFailures &+= 1
+      $0.droppedEventCount &+= 1
+      for key in Self.keys(for: event) where $0.allowedKeys.contains(key) {
+        $0.policyDrops[key, default: 0] &+= 1
+      }
+    }
+  }
+
+  func recordAdmissionDrop(_ event: EndpointEventRecord) {
+    state.withLock {
+      $0.delivery.admissionDrops &+= 1
+      $0.droppedEventCount &+= 1
+      for key in Self.keys(for: event) where $0.allowedKeys.contains(key) {
+        $0.policyDrops[key, default: 0] &+= 1
+      }
+    }
+  }
+
+  func record(_ original: EndpointEventRecord, reservation: AuditWorkBudget.Reservation) {
+    guard reservation.belongs(to: budget) else {
+      recordAdmissionDrop(original)
+      return
+    }
+    let event: EndpointEventRecord
+    do {
+      event =
+        original.estimatedByteCount > maximumFileSize
+        ? try JSONLineEventLogger.recordWithinLimit(original, maximumBytes: maximumFileSize)
+        : original
+    } catch {
+      recordStorageDrop(original)
+      return
+    }
+    // Keep accounting for the producer's transient observation until this
+    // reservation reaches the writer. Do not shrink it during handoff.
+    guard reservation.resize(to: max(reservation.bytes, event.estimatedByteCount)) else {
+      recordAdmissionDrop(event)
+      return
+    }
     state.withLock { state in
-      guard !state.isClosed else { return }
-      guard budget.acquire(bytes: bytes) else {
+      guard !state.isClosed else {
+        state.delivery.admissionDrops &+= 1
         state.droppedEventCount &+= 1
         for key in Self.keys(for: event) where state.allowedKeys.contains(key) {
           state.policyDrops[key, default: 0] &+= 1
         }
         return
       }
-      // Enqueue under the same lock as close, so close drains every accepted event.
       queue.async { [self] in
-        defer { budget.release(bytes: bytes) }
-        global.recordSynchronously(event)
+        // The last owner releases the reservation, including an overlapping
+        // producer still returning from handoff.
+        defer { withExtendedLifetime(reservation) {} }
+        var failed = !global.recordSynchronously(event)
+        let globalStored = !failed
         for key in Self.keys(for: event) where allowedKeys.contains(key) {
           guard
             let evaluation = event.policyEvaluations?.first(where: {
@@ -135,6 +180,7 @@ public final class PolicyAuditLogStore: EndpointEventSink, @unchecked Sendable {
           else { continue }
           var scoped = event
           scoped.policyEvaluations = [evaluation]
+          var stored = false
           do {
             let writer: JSONLineEventLogger
             if let existing = writers[key] {
@@ -142,18 +188,29 @@ public final class PolicyAuditLogStore: EndpointEventSink, @unchecked Sendable {
             } else {
               writer = try JSONLineEventLogger(
                 directoryURL: store.rootDirectory,
-                filename: key.filename,
-                requiredOwnerUserID: store.requiredOwnerUserID,
-                maximumFileSize: maximumFileSize
-              )
+                filename: key.filename, requiredOwnerUserID: store.requiredOwnerUserID,
+                maximumFileSize: maximumFileSize)
               writers[key] = writer
               creationErrors.removeValue(forKey: key)
             }
-            writer.recordSynchronously(scoped)
-          } catch {
-            creationDrops[key, default: 0] &+= 1
-            creationErrors[key] = "Policy log \(key.filename): \(error)"
+            stored = writer.recordSynchronously(scoped)
+          } catch { creationErrors[key] = "Policy log \(key.filename): \(error)" }
+          if !stored {
+            failed = true
+            self.state.withLock { $0.policyDrops[key, default: 0] &+= 1 }
           }
+        }
+        let minimal =
+          event.processLineage?.issues.contains {
+            ["historyOmitted", "historyBudgetExceeded", "oversizedRecord"].contains($0.reason)
+          } == true
+        let storageFailed = failed
+        self.state.withLock {
+          if storageFailed {
+            $0.delivery.storageFailures &+= 1
+            $0.droppedEventCount &+= 1
+          }
+          if globalStored && minimal { $0.delivery.minimalRecordsStored &+= 1 }
         }
       }
     }
@@ -171,9 +228,7 @@ public final class PolicyAuditLogStore: EndpointEventSink, @unchecked Sendable {
     try queue.sync {
       guard allowedKeys.contains(request.key) else { throw PolicyAuditLogStoreError.unknownPolicy }
       let key = request.key
-      let dropped =
-        state.withLock { $0.policyDrops[key, default: 0] }
-        &+ creationDrops[key, default: 0] &+ (writers[key]?.droppedEventCount ?? 0)
+      let dropped = state.withLock { $0.policyDrops[key, default: 0] }
       return try read(
         filenames: [key.filename + ".1", key.filename],
         maximumLineCount: request.maximumLineCount, key: key, dropped: dropped,

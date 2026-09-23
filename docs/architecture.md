@@ -72,6 +72,22 @@ decision, signing facts and observed process history. File contents, command
 arguments and environment variables are not collected. Deleting a policy removes
 its separate policy log; the global log keeps its own retention cycle.
 
+The in-memory history has a 128 MiB estimated-data limit. When space is needed,
+old records no longer needed by observed live executions are reclaimed in batches,
+aiming for at most 112 MiB after admitting the new observation.
+A pass that cannot create sufficient headroom is retried at a bounded rate. A
+later directly observed execution can identify an older execution as superseded;
+this observation is recorded separately from an observed exit time.
+
+Pending history and audit work share a maximum of 1,024 entries and 32 MiB of
+estimated payloads, with dedicated capacity for lifecycle facts and minimal file
+access records. Under load, an access record may omit its process history and
+state the reason. If the reserved capacity is also exhausted, the record can be
+dropped. Admission drops, storage failures and successfully stored minimal records
+are reported separately. A storage failure count represents an event that failed
+in at least one intended log destination. These limits do not describe total
+resident memory.
+
 Process history is an observation, not a complete reconstruction. Ancestors that
 predate observation, lost events and storage limits remain explicit. macOS's
 responsible-process attribution does not prove which application sent a request.

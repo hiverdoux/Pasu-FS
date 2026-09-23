@@ -63,7 +63,7 @@ final class ExtensionRuntime: @unchecked Sendable {
   private let rootStore: SecureAtomicFileStore
   private let auditStore: SecureAtomicFileStore
   private let logger: PolicyAuditLogStore
-  private let auditWorkBudget = AuditWorkBudget()
+  private let auditWorkBudget = AuditWorkBudget.partitioned()
   private let lineageTracker = OSAllocatedUnfairLock<ProcessLineageTracker?>(initialState: nil)
   private let systemCompatibilityCatalog: SystemCompatibilityCatalog
   private let systemCompatibilityCatalogDigest: String
@@ -781,7 +781,9 @@ final class ExtensionRuntime: @unchecked Sendable {
       detail: detail,
       coveredAuthorizationEvents: ["AUTH_OPEN"],
       processLineageStatus: lineageTracker.withLock { $0?.status },
-      droppedAuditEventCount: logger.droppedEventCount
+      droppedAuditEventCount: logger.droppedEventCount,
+      auditDelivery: logger.deliveryMetrics,
+      authorization: coordinator.withLock { $0?.authorizationMetrics }
     )
   }
 

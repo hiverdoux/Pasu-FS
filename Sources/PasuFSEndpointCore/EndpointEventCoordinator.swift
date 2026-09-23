@@ -81,6 +81,8 @@ public final class EndpointEventCoordinator: @unchecked Sendable {
   }
 
   private let state: OSAllocatedUnfairLock<MutableState>
+  private let responseMetrics = OSAllocatedUnfairLock(initialState: AuthorizationMetrics())
+  public var authorizationMetrics: AuthorizationMetrics { responseMetrics.withLock { $0 } }
   private let sink: any EndpointEventSink
   private let lineageTracker: ProcessLineageTracker?
   private let recordLifecycleEvents: Bool
@@ -353,7 +355,7 @@ public final class EndpointEventCoordinator: @unchecked Sendable {
     )
 
     guard evaluation.isInScope else {
-      _ = es_respond_flags_result(client, message, UInt32.max, false)
+      _ = respondMeasured(client: client, message: message, flags: UInt32.max)
       return
     }
 
@@ -497,6 +499,22 @@ public final class EndpointEventCoordinator: @unchecked Sendable {
     }
   }
 
+  private func respondMeasured(
+    client: OpaquePointer, message: UnsafePointer<es_message_t>, flags: UInt32
+  ) -> es_respond_result_t {
+    let deadline = message.pointee.deadline
+    let result = es_respond_flags_result(client, message, flags, false)
+    let finished = mach_absolute_time()
+    responseMetrics.withLock {
+      $0.responses &+= 1
+      if result != ES_RESPOND_RESULT_SUCCESS { $0.failures &+= 1 }
+      if finished >= deadline { $0.deadlineExceeded &+= 1 }
+      let remaining = finished >= deadline ? 0 : deadline - finished
+      $0.minimumRemainingTicks = min($0.minimumRemainingTicks ?? remaining, remaining)
+    }
+    return result
+  }
+
   private func respond(
     client: OpaquePointer,
     message: UnsafePointer<es_message_t>,
@@ -504,7 +522,7 @@ public final class EndpointEventCoordinator: @unchecked Sendable {
     record: EndpointEventRecord,
     emit: (EndpointEventRecord) -> Void
   ) {
-    let result = es_respond_flags_result(client, message, authorizedFlags, false)
+    let result = respondMeasured(client: client, message: message, flags: authorizedFlags)
     if result == ES_RESPOND_RESULT_SUCCESS {
       emit(record)
     } else {

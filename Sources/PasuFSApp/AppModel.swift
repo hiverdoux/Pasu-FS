@@ -292,6 +292,8 @@ final class AppModel {
     )
   }
 
+  var auditDeliveryMetrics: AuditDeliveryMetrics? { latestEvidence?.snapshot.auditDelivery }
+  var authorizationMetrics: AuthorizationMetrics? { latestEvidence?.snapshot.authorization }
   var processLineageStatus: ProcessLineageStatus? { latestEvidence?.snapshot.processLineageStatus }
 
   var droppedAuditEventCount: UInt64 {

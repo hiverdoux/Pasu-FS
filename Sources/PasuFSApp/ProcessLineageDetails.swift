@@ -32,7 +32,7 @@ struct ProcessLineageDetails: View {
 
   var body: some View {
     LazyVStack(alignment: .leading, spacing: 12) {
-      Text("Full process history").font(.headline)
+      Text("Process history").font(.headline)
       Text("Observed at \(snapshot.capturedAt.formatted(date: .abbreviated, time: .standard))")
         .font(.caption).foregroundStyle(.secondary)
       Text(
@@ -102,6 +102,14 @@ struct ProcessLineageDetails: View {
       if let observed = process.observedAt {
         Text("Last observed: \(observed.formatted(date: .abbreviated, time: .standard))").font(
           .caption)
+      }
+      if process.exitedAt == nil, let replaced = process.supersededObservedAt,
+        let replacement = process.supersededBy
+      {
+        Text(
+          "A different execution \(replacement.id) was observed at \(replaced.formatted(date: .abbreviated, time: .standard)). The exact end time was not observed."
+        )
+        .font(.caption).foregroundStyle(.secondary)
       }
       if let ended = process.exitedAt {
         Text("Execution ended: \(ended.formatted(date: .abbreviated, time: .standard))").font(
