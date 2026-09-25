@@ -7,7 +7,7 @@ import Security
 enum UninstallAuthorization {
   static func validate(_ data: Data) throws {
     guard data.count == MemoryLayout<AuthorizationExternalForm>.size else {
-      throw MaintenanceError("Missing or malformed uninstall authorization.")
+      throw MaintenanceError(.authorizationMalformed)
     }
     var external = AuthorizationExternalForm()
     _ = withUnsafeMutableBytes(of: &external) { data.copyBytes(to: $0) }
@@ -15,19 +15,18 @@ enum UninstallAuthorization {
     let importStatus = AuthorizationCreateFromExternalForm(&external, &reference)
     guard importStatus == errAuthorizationSuccess,
       let reference
-    else { throw MaintenanceError("Invalid uninstall authorization (OSStatus \(importStatus)).") }
+    else { throw MaintenanceError(.authorizationInvalid, detail: String(importStatus)) }
     defer { AuthorizationFree(reference, []) }
     var definition: CFDictionary?
-    let lookup = MaintenanceContract.uninstallRight.withCString {
+    let lookup = AdministrativeAuthorizationOperation.uninstall.rightName.withCString {
       AuthorizationRightGet($0, &definition)
     }
     guard lookup == errAuthorizationSuccess, let definition,
       AdministrativeAuthorizationRule.isSecure(definition)
     else {
-      throw MaintenanceError(
-        "The uninstall authorization rule is not the expected one-time administrator rule.")
+      throw MaintenanceError(.authorizationRuleUnexpected)
     }
-    let status = MaintenanceContract.uninstallRight.withCString { name in
+    let status = AdministrativeAuthorizationOperation.uninstall.rightName.withCString { name in
       var item = AuthorizationItem(name: name, valueLength: 0, value: nil, flags: 0)
       return withUnsafeMutablePointer(to: &item) { itemPointer in
         var rights = AuthorizationRights(count: 1, items: itemPointer)
@@ -38,11 +37,10 @@ enum UninstallAuthorization {
       }
     }
     if status == errAuthorizationCanceled {
-      throw MaintenanceError("Administrator authentication was canceled. No files were removed.")
+      throw MaintenanceError(.authorizationCanceled)
     }
     guard status == errAuthorizationSuccess else {
-      throw MaintenanceError(
-        "Administrator approval for uninstalling was not granted (OSStatus \(status)).")
+      throw MaintenanceError(.authorizationDenied, detail: String(status))
     }
   }
 }
@@ -107,7 +105,7 @@ final class MaintenanceService: NSObject, NSXPCListenerDelegate, @unchecked Send
     queue.async { [self] in
       lastActivity = Date()
       respond(reply) {
-        guard nonce.count == 32 else { throw MaintenanceError("Invalid maintenance handshake.") }
+        guard nonce.count == 32 else { throw MaintenanceError(.invalidHandshake) }
         return try MaintenanceContract.encode(
           MaintenanceStatus(nonce: nonce, state: stateStore.read()))
       }
@@ -122,7 +120,7 @@ final class MaintenanceService: NSObject, NSXPCListenerDelegate, @unchecked Send
       lastActivity = Date()
       respond(reply) {
         guard !removing, session == nil || session!.expires <= Date() else {
-          throw MaintenanceError("Another uninstall request is already in progress.")
+          throw MaintenanceError(.requestInProgress)
         }
         let request = try MaintenanceContract.decode(UninstallPreparation.self, from: data)
         try UninstallAuthorization.validate(request.authorization)
@@ -143,7 +141,7 @@ final class MaintenanceService: NSObject, NSXPCListenerDelegate, @unchecked Send
       do {
         let request = try MaintenanceContract.decode(UninstallCommit.self, from: data)
         guard !removing, let authorized = session else {
-          throw MaintenanceError("No current uninstall approval.")
+          throw MaintenanceError(.noCurrentApproval)
         }
         try authorized.validate(ticket: request.ticket, connection: connection)
         switch request.action {
@@ -171,7 +169,8 @@ final class MaintenanceService: NSObject, NSXPCListenerDelegate, @unchecked Send
               try? stateStore.write(
                 UninstallState(
                   phase: .failed, removeData: authorized.removeData,
-                  failure: String(describing: error)))
+                  failure: error as? MaintenanceError
+                    ?? MaintenanceError(.internalFailure, detail: String(describing: error))))
               NSLog("Pasu FS uninstall failed: %@", String(describing: error))
               removing = false
               lastActivity = Date()

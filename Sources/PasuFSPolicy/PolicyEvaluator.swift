@@ -155,7 +155,7 @@ public enum RuleMatch: Equatable, Sendable {
 /// descendant inheritance. It has no filesystem access and does not assign an
 /// allow/deny meaning to a match; policy type interpretation stays with the
 /// caller. `decision(for:)` remains as the single-whitelist compatibility API
-/// used by the integration harness.
+/// exercised by the policy evaluator tests.
 public struct PolicyEvaluator: Sendable {
   private var policy: PolicySnapshot
   private var inheritedRuleByProcess: [ProcessInstanceKey: String] = [:]

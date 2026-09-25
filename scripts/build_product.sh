@@ -33,6 +33,18 @@ host_entitlements="$stage_dir/signing/host.entitlements"
 extension_entitlements="$stage_dir/signing/extension.entitlements"
 
 scratch_path="$stage_dir/swift-build"
+# macOS draws an app with the current system design only when its executables record a
+# current SDK. The default Swift Build engine records the deployment target instead, so pass
+# the minimum macOS version from the package manifest and the SDK version to the linker.
+minimum_macos=$(swift package \
+  --package-path "$source_root" \
+  --scratch-path "$scratch_path" \
+  --cache-path "$stage_dir/cache" \
+  --config-path "$stage_dir/config" \
+  --security-path "$stage_dir/security" \
+  dump-package | plutil -extract platforms.0.version raw -o - -)
+sdk_version=$(xcrun --sdk macosx --show-sdk-version)
+platform_version="-Xlinker -platform_version -Xlinker macos -Xlinker $minimum_macos -Xlinker $sdk_version"
 swift build \
   --package-path "$source_root" \
   --scratch-path "$scratch_path" \
@@ -40,6 +52,7 @@ swift build \
   --config-path "$stage_dir/config" \
   --security-path "$stage_dir/security" \
   --configuration release \
+  $platform_version \
   --product pasu-fs-app
 swift build \
   --package-path "$source_root" \
@@ -48,6 +61,7 @@ swift build \
   --config-path "$stage_dir/config" \
   --security-path "$stage_dir/security" \
   --configuration release \
+  $platform_version \
   --product pasu-fs-host
 swift build \
   --package-path "$source_root" \
@@ -56,6 +70,7 @@ swift build \
   --config-path "$stage_dir/config" \
   --security-path "$stage_dir/security" \
   --configuration release \
+  $platform_version \
   --product pasu-fs-system-extension
 swift build \
   --package-path "$source_root" \
@@ -64,6 +79,7 @@ swift build \
   --config-path "$stage_dir/config" \
   --security-path "$stage_dir/security" \
   --configuration release \
+  $platform_version \
   --product pasu-fs-maintenance
 
 bin_path=$(swift build \
@@ -73,7 +89,14 @@ bin_path=$(swift build \
   --config-path "$stage_dir/config" \
   --security-path "$stage_dir/security" \
   --configuration release \
+  $platform_version \
   --show-bin-path)
+for executable in pasu-fs-app pasu-fs-host pasu-fs-system-extension pasu-fs-maintenance; do
+  recorded=$(otool -l "$bin_path/$executable" |
+    awk '$1 == "cmd" && $2 == "LC_BUILD_VERSION" { found = 1 } found && $1 == "sdk" { print $2; exit }')
+  [ "$recorded" = "$sdk_version" ] ||
+    { echo "$executable records SDK ${recorded:-none} instead of $sdk_version." >&2; exit 1; }
+done
 
 app="$stage_dir/Pasu FS.app"
 system_extension="$app/Contents/Library/SystemExtensions/$app_id.endpointsecurity.systemextension"
@@ -91,6 +114,26 @@ ditto \
 ditto \
   "$bin_path/pasu-fs-system-extension" \
   "$system_extension/Contents/MacOS/pasu-fs-system-extension"
+
+# Each language folder lets macOS show the app in the user's preferred language.
+localization="$source_root/Product/Localization"
+app_resources="$app/Contents/Resources"
+extension_resources="$system_extension/Contents/Resources"
+mkdir -p "$app_resources" "$extension_resources"
+xcrun xcstringstool compile "$localization/App/Localizable.xcstrings" \
+  --output-directory "$app_resources"
+xcrun xcstringstool compile "$localization/App/InfoPlist.xcstrings" \
+  --output-directory "$app_resources"
+xcrun xcstringstool compile "$localization/SystemExtension/InfoPlist.xcstrings" \
+  --output-directory "$extension_resources"
+for resource in \
+  "$app_resources/ko.lproj/Localizable.strings" \
+  "$app_resources/en.lproj/Localizable.stringsdict" \
+  "$app_resources/ko.lproj/InfoPlist.strings" \
+  "$extension_resources/ko.lproj/InfoPlist.strings"
+do
+  [ -f "$resource" ] || { echo "Missing compiled localization: $resource" >&2; exit 1; }
+done
 
 ditto "$stage_dir/signing/host.provisionprofile" "$app/Contents/embedded.provisionprofile"
 ditto "$stage_dir/signing/extension.provisionprofile" \

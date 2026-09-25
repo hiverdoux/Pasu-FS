@@ -37,8 +37,11 @@ public final class SecureAtomicFileStore: @unchecked Sendable {
   public let rootDirectory: URL
   public let requiredOwnerUserID: UInt32?
 
+  /// The parents of the root are kept as their physical path so descriptor-relative removal of
+  /// the same files never meets a symbolic-link alias such as `/tmp` or `/var`. The root itself
+  /// is not resolved: a root that is a symbolic link is refused when it is opened.
   public init(rootDirectory: URL, requiredOwnerUserID: UInt32?) {
-    self.rootDirectory = rootDirectory.standardizedFileURL
+    self.rootDirectory = PhysicalPath.resolve(rootDirectory)
     self.requiredOwnerUserID = requiredOwnerUserID
   }
 

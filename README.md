@@ -8,7 +8,8 @@ The app uses Apple's **Endpoint Security** framework, which lets an authorized
 system extension approve or deny supported operations before they proceed.
 This source release is for developers with Apple's Endpoint Security capability
 and development signing profiles for their test Macs. It is not a notarized
-installer for unrestricted distribution.
+installer for unrestricted distribution. The app and its installer follow the
+macOS language setting and are available in English and Korean.
 
 ## What it protects
 
@@ -56,7 +57,8 @@ From the repository root:
 ```
 
 This checks public source content, formatting, property lists, shell syntax,
-compilation and automated tests. Temporary build files are removed afterward.
+compilation, the Korean translations of the app and installer, and automated
+tests. Temporary build files are removed afterward.
 It does not install the app or validate macOS permission prompts, file enforcement,
 updates or removal on a real Mac.
 
@@ -69,6 +71,7 @@ product will fail. It does not subscribe to file events or enforce policies.
 
 - [Build and signing setup](docs/building.md)
 - [Install, verify, update and uninstall](docs/installation.md)
+- [Using the app's screens and settings](docs/using.md)
 - [How the components work](docs/architecture.md)
 - [Security boundaries and limitations](docs/threat-model.md)
 - [Report a security problem](SECURITY.md)

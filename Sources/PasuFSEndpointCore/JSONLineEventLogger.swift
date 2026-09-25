@@ -54,7 +54,7 @@ public final class JSONLineEventLogger: EndpointEventSink, @unchecked Sendable {
   ) throws {
     precondition(maximumPendingRecords > 0)
     precondition(maximumFileSize > 0)
-    self.directoryURL = directoryURL.standardizedFileURL
+    self.directoryURL = PhysicalPath.resolve(directoryURL)
     self.filename = filename
     self.requiredOwnerUserID = requiredOwnerUserID
     self.maximumFileSize = maximumFileSize

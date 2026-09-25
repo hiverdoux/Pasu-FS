@@ -134,7 +134,10 @@ enum StopProtectionQuitPolicy {
       .stopped
     case .completed:
       .failed(
-        "macOS accepted the deactivation request, but Pasu FS could not verify that the extension stopped. The app remains open."
+        String(
+          localized:
+            "macOS accepted the deactivation request, but Pasu FS could not confirm that the extension stopped. The app stays open."
+        )
       )
     case .requiresRestart:
       .requiresRestart

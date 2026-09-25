@@ -1,3 +1,4 @@
+import AppKit
 import PasuFSConfiguration
 import SwiftUI
 import UniformTypeIdentifiers
@@ -6,443 +7,457 @@ struct PolicyView: View {
   @Bindable var model: AppModel
   let policyID: UUID
 
-  @State private var selectedTab = PolicyEditorTab.settings
-
-  @State private var isSelectingRoot = false
-  @State private var isSelectingApplication = false
-  @State private var isSelectingAuditRule = false
+  @State private var tab: PolicyEditorTab
+  @State private var isChoosingFolder = false
   @State private var isConfirmingDelete = false
   @State private var pendingTypeChange: PolicyTypeChangeRequest?
+  @State private var isConfirmingProtection = false
+  @State private var editingRule: PolicyRule?
+
+  init(model: AppModel, policyID: UUID, initialTab: PolicyEditorTab = .settings) {
+    self.model = model
+    self.policyID = policyID
+    _tab = State(initialValue: initialTab)
+  }
 
   var body: some View {
-    Group {
-      if let draft = model.policyDraft(id: policyID) {
-        VStack(spacing: 0) {
-          Picker("Policy tab", selection: $selectedTab) {
+    presentingSheets(presentingDialogs(decorated(content)))
+  }
+
+  @ViewBuilder
+  private var content: some View {
+    if let draft = model.policyDraft(id: policyID) {
+      switch tab {
+      case .settings:
+        settingsForm(draft)
+      case .log:
+        PolicyLogView(model: model, policyID: policyID) {
+          isConfirmingProtection = true
+        }
+      }
+    } else {
+      ContentUnavailableView(
+        "Policy Unavailable",
+        systemImage: "lock.doc",
+        description: Text("The selected policy no longer exists.")
+      )
+    }
+  }
+
+  private func decorated(_ view: some View) -> some View {
+    view
+      .navigationTitle(title)
+      .navigationSubtitle(subtitle)
+      .toolbar {
+        ToolbarItem(placement: .navigation) {
+          Button {
+            revealFolder()
+          } label: {
+            Label("Show in Finder", systemImage: "folder")
+          }
+          .disabled(folderPath == nil)
+          .help("Show the protected folder in Finder")
+        }
+        // Centered, it stays in the same place on both tabs and moves toward the free space when
+        // the search field expands. The main window's minimum width keeps room for it then.
+        ToolbarItem(placement: .principal) {
+          Picker("View", selection: $tab) {
             Text("Settings").tag(PolicyEditorTab.settings)
             Text("Log").tag(PolicyEditorTab.log)
           }
           .pickerStyle(.segmented)
-          .labelsHidden()
-          .accessibilityLabel("Policy tab")
-          .frame(width: 220)
-          .padding(12)
-          Divider()
-          switch selectedTab {
-          case .settings:
-            policyEditor(draft)
-          case .log:
-            PolicyLogView(model: model, policyID: policyID)
-              .frame(maxWidth: .infinity, maxHeight: .infinity)
-          }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-      } else {
-        ContentUnavailableView(
-          "Policy unavailable",
-          systemImage: "lock.doc",
-          description: Text("The selected policy no longer exists.")
-        )
-      }
-    }
-    .navigationTitle(model.policyDraft(id: policyID)?.name ?? "Policy")
-    .onChange(of: policyID) { selectedTab = .settings }
-    .navigationSubtitle(savedStateDescription)
-    .toolbar {
-      ToolbarItem {
-        if model.isPolicyDirty(policyID) {
-          HStack(spacing: 5) {
-            Circle()
-              .fill(.orange)
-              .frame(width: 7, height: 7)
-            Text("Unsaved changes")
-              .font(.callout)
-              .foregroundStyle(.orange)
-          }
         }
       }
-    }
-    .sheet(isPresented: $isSelectingAuditRule) {
-      AuditRulePicker(model: model, policyID: policyID)
-        .frame(minWidth: 620, minHeight: 440)
-    }
-    .sheet(item: $pendingTypeChange) { request in
-      PolicyTypeChangeSheet(
-        currentType: request.currentType,
-        targetType: request.targetType,
-        ruleCount: request.ruleCount,
-        onConfirm: { deletingAllRules in
-          model.applyPolicyTypeChange(
-            policyID: request.policyID,
-            to: request.targetType,
-            deletingAllRules: deletingAllRules
-          )
-          pendingTypeChange = nil
-        },
-        onCancel: { pendingTypeChange = nil }
-      )
-      .frame(width: 430)
-    }
-    .confirmationDialog(
-      "Delete this policy?",
-      isPresented: $isConfirmingDelete,
-      titleVisibility: .visible
-    ) {
-      Button("Delete Policy", role: .destructive) {
-        Task { await model.deletePolicy(id: policyID) }
+      .toolbarGroups(isShown: isDirty) {
+        ToolbarItem {
+          Button("Revert") {
+            model.revertPolicy(id: policyID)
+          }
+          .disabled(!canRevert)
+        }
+      } _: {
+        ToolbarItem {
+          saveButton
+        }
       }
-      Button("Cancel", role: .cancel) {}
-    } message: {
-      if model.activePolicy(id: policyID) == nil {
-        Text("This unsaved policy draft will be discarded.")
-      } else {
-        Text(
-          "The policy and its separate log files will be removed immediately. Records in the overall Audit Log follow its existing retention limit."
-        )
-      }
-    }
+      .onAppear(perform: takePendingLogRequest)
+      .onChange(of: model.pendingPolicyLogPolicyID) { takePendingLogRequest() }
+      .focusedSceneValue(
+        \.policyCommands,
+        PolicyCommandActions(
+          save: canSave ? { save() } : nil,
+          revert: canRevert ? { model.revertPolicy(id: policyID) } : nil,
+          showInFinder: folderPath == nil ? nil : { revealFolder() }
+        ))
   }
 
-  // MARK: - Layout
+  private func presentingDialogs(_ view: some View) -> some View {
+    view
+      .alert(
+        typeChangeTitle,
+        isPresented: typeChangeIsPresented,
+        presenting: pendingTypeChange
+      ) { request in
+        Button("Keep Rules and Change") {
+          apply(request, deletingAllRules: false)
+        }
+        Button("Delete All Rules and Change", role: .destructive) {
+          apply(request, deletingAllRules: true)
+        }
+        Button("Cancel", role: .cancel) {
+          pendingTypeChange = nil
+        }
+      } message: { request in
+        Text(typeChangeMessage(request))
+      }
+      .confirmationDialog(
+        "Delete this policy?",
+        isPresented: $isConfirmingDelete,
+        titleVisibility: .visible
+      ) {
+        Button("Delete Policy", role: .destructive) {
+          Task { await model.deletePolicy(id: policyID) }
+        }
+        Button("Cancel", role: .cancel) {}
+      } message: {
+        Text(deleteMessage)
+      }
+  }
 
-  @ViewBuilder
-  private func policyEditor(_ draft: DirectoryPolicyDraft) -> some View {
+  private func presentingSheets(_ view: some View) -> some View {
+    view
+      .alert("Switch to Protection?", isPresented: $isConfirmingProtection) {
+        Button("Switch and Save") {
+          Task { await model.switchToProtection(policyID: policyID) }
+        }
+        Button("Cancel", role: .cancel) {}
+      } message: {
+        Text(protectionSwitchMessage)
+      }
+      .sheet(item: $editingRule) { rule in
+        AddProgramSheet(model: model, policyID: policyID, editing: rule)
+      }
+  }
+
+  private var typeChangeTitle: String {
+    guard let request = pendingTypeChange else { return "" }
+    return String(localized: "Change to \(request.targetType.displayName)?")
+  }
+
+  private var deleteMessage: String {
+    if model.activePolicy(id: policyID) == nil {
+      return String(localized: "This unsaved policy will be discarded.")
+    }
+    return String(
+      localized:
+        "The policy and its log files are removed right away."
+    )
+  }
+
+  // MARK: - Settings form
+
+  private func settingsForm(_ draft: DirectoryPolicyDraft) -> some View {
     Form {
-      identitySection(draft)
+      if let notice {
+        Section {
+          Label(notice.text, systemImage: notice.systemImage)
+            .foregroundStyle(notice.color)
+        }
+      }
+      Section {
+        TextField("Name", text: nameBinding, prompt: Text("Policy name"))
+        folderRow(draft)
+      }
+      behaviorSection(draft)
       rulesSection(draft)
-      systemCompatibilitySection(draft)
-      if hasMessages {
-        messagesSection
+      compatibilitySection(draft)
+      Section {
+        Button("Delete Policy…", role: .destructive) {
+          isConfirmingDelete = true
+        }
+        .foregroundStyle(.red)
+        .disabled(model.isBusy)
       }
     }
     .formStyle(.grouped)
-    .safeAreaInset(edge: .bottom, spacing: 0) {
-      saveBar
-    }
   }
 
-  private var savedStateDescription: String {
-    if model.activePolicy(id: policyID) == nil {
-      return "Not saved yet"
-    }
-    if let revision = model.activeRevision {
-      return "Saved in policy-set revision \(revision)"
-    }
-    return "Saved"
-  }
-
-  // MARK: - Identity section
-
-  private func identitySection(_ draft: DirectoryPolicyDraft) -> some View {
-    Section {
-      LabeledContent("Name") {
-        TextField("Policy name", text: nameBinding)
-          .textFieldStyle(.roundedBorder)
-          .labelsHidden()
-          .frame(width: 260)
+  private func folderRow(_ draft: DirectoryPolicyDraft) -> some View {
+    FolderPathRow(
+      path: draft.protectedRootPath,
+      isFocusRequested: model.pendingFolderEntryPolicyID == policyID,
+      commit: { text in
+        model.updatePolicyDraft(id: policyID) {
+          $0.protectedRootPath = ProtectedFolderCheck.path(fromTypedText: text)
+        }
+      },
+      choose: { isChoosingFolder = true },
+      onFocus: { model.pendingFolderEntryPolicyID = nil }
+    )
+    .fileImporter(
+      isPresented: $isChoosingFolder,
+      allowedContentTypes: [.folder],
+      allowsMultipleSelection: false
+    ) { result in
+      if case .success(let urls) = result, let url = urls.first {
+        setFolder(url)
       }
+    }
+    .dropDestination(for: URL.self) { urls, _ in
+      guard let url = urls.first else { return false }
+      setFolder(url)
+      return true
+    }
+  }
+
+  private func behaviorSection(_ draft: DirectoryPolicyDraft) -> some View {
+    Section {
       LabeledContent {
         Picker("Mode", selection: modeBinding) {
           Text("Protection").tag(PolicyMode.protection)
           Text("Audit").tag(PolicyMode.audit)
         }
-        .pickerStyle(.segmented)
+        .pickerStyle(.radioGroup)
+        .horizontalRadioGroupLayout()
         .labelsHidden()
-        .frame(width: 260)
       } label: {
         Text("Mode")
-        Text("Protection blocks; Audit only records.")
       }
       LabeledContent {
-        Picker("Type", selection: policyTypeBinding) {
+        Picker("Type", selection: typeBinding) {
           Text("Whitelist").tag(PolicyType.whitelist)
           Text("Blacklist").tag(PolicyType.blacklist)
         }
-        .pickerStyle(.segmented)
+        .pickerStyle(.radioGroup)
+        .horizontalRadioGroupLayout()
         .labelsHidden()
-        .frame(width: 260)
       } label: {
         Text("Type")
-        Text(modeAndTypeExplanation(for: draft))
       }
-      LabeledContent {
-        HStack(spacing: 8) {
-          TextField("Absolute directory path", text: protectedRootBinding)
-            .textFieldStyle(.roundedBorder)
-            .labelsHidden()
-            .font(.body.monospaced())
-            .frame(width: 240)
-          Button("Choose…") { isSelectingRoot = true }
-            .fileImporter(
-              isPresented: $isSelectingRoot,
-              allowedContentTypes: [.folder],
-              allowsMultipleSelection: false
-            ) { result in
-              if case .success(let urls) = result, let url = urls.first {
-                model.updatePolicyDraft(id: policyID) {
-                  $0.protectedRootPath = url.standardizedFileURL.resolvingSymlinksInPath().path
-                }
-              }
-            }
-        }
-      } label: {
-        Text("Protected folder")
-        Text(
-          "One folder per policy. A directory can pair one Protection and one Audit policy, but duplicate mode-and-directory pairs are rejected."
-        )
-      }
+    } header: {
+      Text("Behavior")
     }
   }
-
-  // MARK: - Rules
 
   private func rulesSection(_ draft: DirectoryPolicyDraft) -> some View {
     Section {
-      if draft.rules.isEmpty {
-        Text(emptyRulesMessage(for: draft))
-          .font(.callout)
+      if let warning = emptyRulesWarning(draft) {
+        WarningLabel(text: warning)
+      } else if draft.rules.isEmpty {
+        // A section without rows would let the next section's header collapse into this one.
+        Text("No rules")
           .foregroundStyle(.secondary)
       }
-      ForEach(draft.rules, id: \.id) { rule in
-        RuleEditorRow(
-          rule: Binding(
-            get: {
-              model.policyDraft(id: policyID)?.rules.first(where: { $0.id == rule.id })
-                ?? rule
-            },
-            set: { model.updateRule(policyID: policyID, rule: $0) }
-          ),
-          policyType: draft.policyType,
-          displayName: model.ruleDisplayName(for: rule)
-        ) {
-          model.removeRule(policyID: policyID, ruleID: rule.id)
-        }
+      ForEach(draft.rules) { rule in
+        RuleRow(
+          rule: rule,
+          displayName: model.ruleDisplayName(for: rule),
+          isEnabled: enabledBinding(for: rule),
+          onEdit: { editingRule = rule },
+          onRemove: { model.removeRule(policyID: policyID, ruleID: rule.id) }
+        )
       }
     } header: {
       HStack {
-        Text(
-          "Rules · \(draft.rules.lazy.filter(\.isEnabled).count) of \(draft.rules.count) enabled"
-        )
-        Spacer()
-        Menu("Add Rule") {
-          Button("Choose Application…") { isSelectingApplication = true }
-          Button("Choose from Audit Log…") { isSelectingAuditRule = true }
-          Divider()
-          Button("Signed app (manual)") { model.addTeamSignedRule(policyID: policyID) }
-          Button("Apple platform binary (manual)") {
-            model.addPlatformRule(policyID: policyID)
-          }
-        }
-        .fixedSize()
-        .fileImporter(
-          isPresented: $isSelectingApplication,
-          allowedContentTypes: [.application],
-          allowsMultipleSelection: false
-        ) { result in
-          if case .success(let urls) = result, let url = urls.first {
-            model.addRule(policyID: policyID, fromApplicationAt: url)
-          }
-        }
-      }
-    }
-  }
-
-  private func systemCompatibilitySection(
-    _ draft: DirectoryPolicyDraft
-  ) -> some View {
-    Section {
-      if draft.policyType == .blacklist {
-        compatibilityEmptyRow(
-          title: "Not used by Blacklist policies",
-          detail:
-            "A Blacklist already allows every non-matching process. Explicit blacklist matches always remain denied."
-        )
-      } else if model.systemCompatibilityProfileItems(policyID: policyID).isEmpty {
-        compatibilityEmptyRow(
-          title: "No verified profiles available",
-          detail:
-            "The infrastructure is active, but no macOS service is trusted automatically. A Time Machine profile will be added only after host entitlement testing establishes its exact actors and open flags."
-        )
-      } else {
-        ForEach(model.systemCompatibilityProfileItems(policyID: policyID), id: \.id) { item in
-          systemCompatibilityRow(item)
-        }
-      }
-    } header: {
-      HStack {
-        Text("System compatibility")
-        Spacer()
-        Text("Built-in profiles · direct actors only")
-          .font(.caption)
-          .foregroundStyle(.tertiary)
-      }
-    }
-  }
-
-  private func compatibilityEmptyRow(title: String, detail: String) -> some View {
-    HStack(alignment: .top, spacing: 12) {
-      IconTile(systemImage: "puzzlepiece.extension", tint: .secondary)
-      VStack(alignment: .leading, spacing: 2) {
-        Text(title)
-          .font(.body.weight(.medium))
-        Text(detail)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-      }
-      Spacer()
-    }
-  }
-
-  private func systemCompatibilityRow(
-    _ item: SystemCompatibilityProfileItem
-  ) -> some View {
-    HStack(alignment: .top, spacing: 12) {
-      IconTile(systemImage: "puzzlepiece.extension", tint: .secondary)
-      VStack(alignment: .leading, spacing: 3) {
-        HStack(spacing: 5) {
-          Text(item.profile.displayName)
-            .font(.body.weight(.medium))
-          Text("· \(compatibilityStateText(item.state))")
-            .font(.callout)
-            .foregroundStyle(compatibilityTint(item.state))
-        }
-        Text(item.profile.roleDescription)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-        Text(item.profile.consequence)
-          .font(.caption2)
-          .foregroundStyle(.orange)
-      }
-      Spacer(minLength: 12)
-      Button(
-        needsCompatibilityReview(item.state)
-          ? "Review & Enable" : item.isEnabled ? "Disable" : "Enable"
-      ) {
-        Task {
-          await model.setSystemCompatibilityProfile(
-            policyID: policyID,
-            profileID: item.profile.id,
-            enabled: needsCompatibilityReview(item.state) ? true : !item.isEnabled
+        Text(PolicyBehaviorText.rulesTitle(draft.policyType))
+        if !draft.rules.isEmpty {
+          Text(
+            RuleCountText.summary(
+              active: draft.rules.lazy.filter(\.isEnabled).count, total: draft.rules.count)
           )
+          .foregroundStyle(.secondary)
         }
-      }
-      .disabled(
-        model.isBusy
-          || model.activePolicy(id: policyID) == nil
-          || model.isPolicyDirty(policyID)
-          || !model.systemCompatibilityCatalogMatchesExtension
-      )
-    }
-  }
-
-  private func compatibilityStateText(
-    _ state: SystemCompatibilityProfileState
-  ) -> String {
-    switch state {
-    case .active: "Active"
-    case .disabled: "Off"
-    case .needsReview: "Review required"
-    case .missingProfile: "Unavailable"
-    case .unsupportedOS: "Unsupported on this macOS"
-    case .policyContextChanged: "Policy changed"
-    case .policyMissing: "Policy unavailable"
-    }
-  }
-
-  private func needsCompatibilityReview(
-    _ state: SystemCompatibilityProfileState
-  ) -> Bool {
-    state == .needsReview || state == .policyContextChanged
-  }
-
-  private func compatibilityTint(
-    _ state: SystemCompatibilityProfileState
-  ) -> Color {
-    switch state {
-    case .active: .green
-    case .disabled: .secondary
-    case .needsReview, .missingProfile, .unsupportedOS, .policyContextChanged,
-      .policyMissing:
-      .orange
-    }
-  }
-
-  // MARK: - Messages
-
-  private var hasMessages: Bool {
-    model.draftValidationMessage(for: policyID) != nil
-      || model.policySynchronizationWarning != nil
-      || model.systemCompatibilitySynchronizationWarning != nil
-      || model.lastError != nil
-  }
-
-  private var messagesSection: some View {
-    Section {
-      if let validationMessage = model.draftValidationMessage(for: policyID) {
-        Label {
-          Text(validationMessage)
-        } icon: {
-          Image(systemName: "exclamationmark.circle")
-            .foregroundStyle(.orange)
+        Spacer()
+        Button {
+          model.addProgramRequest = AddProgramRequest(policyID: policyID)
+        } label: {
+          Label("Add Program…", systemImage: "plus")
         }
-      }
-      if let warning = model.policySynchronizationWarning {
-        Label {
-          Text(warning)
-        } icon: {
-          Image(systemName: "arrow.triangle.2.circlepath")
-            .foregroundStyle(.orange)
-        }
-      }
-      if let warning = model.systemCompatibilitySynchronizationWarning {
-        Label {
-          Text(warning)
-        } icon: {
-          Image(systemName: "puzzlepiece.extension")
-            .foregroundStyle(.orange)
-        }
-      }
-      if let error = model.lastError {
-        Text(error)
-          .font(.callout)
-          .foregroundStyle(.red)
       }
     }
   }
 
-  // MARK: - Save bar
+  /// A Protection whitelist without rules in use denies every open in its folder.
+  private func emptyRulesWarning(_ draft: DirectoryPolicyDraft) -> String? {
+    guard draft.mode == .protection, draft.policyType == .whitelist,
+      !draft.rules.contains(where: \.isEnabled)
+    else { return nil }
+    return String(
+      localized: "No program is allowed. After you save, every open in this folder is denied.")
+  }
 
-  private var saveBar: some View {
-    HStack(spacing: 10) {
-      Button("Delete Policy…", role: .destructive) {
-        isConfirmingDelete = true
+  @ViewBuilder
+  private func compatibilitySection(_ draft: DirectoryPolicyDraft) -> some View {
+    if draft.policyType == .whitelist {
+      Section {
+        let items = model.systemCompatibilityProfileItems(policyID: policyID)
+        if items.isEmpty {
+          Label("No verified compatibility profiles yet", systemImage: "puzzlepiece.extension")
+        } else {
+          ForEach(items) { item in
+            CompatibilityProfileRow(
+              item: item,
+              isEditable: compatibilityIsEditable,
+              disabledReason: compatibilityDisabledReason
+            ) { enabled in
+              Task {
+                await model.setSystemCompatibilityProfile(
+                  policyID: policyID, profileID: item.profile.id, enabled: enabled)
+              }
+            }
+          }
+        }
+      } header: {
+        Text("System Compatibility")
       }
-      .disabled(model.isBusy)
-      Spacer()
-      Text("Save submits the full policy set atomically as \(model.nextRevisionDescription).")
-        .font(.caption)
-        .foregroundStyle(.tertiary)
-      Button("Revert") { model.revertPolicy(id: policyID) }
-        .disabled(model.isBusy || !model.isPolicyDirty(policyID))
-      Button(model.isBusy ? "Saving…" : "Save") {
-        Task { await model.savePolicy(id: policyID) }
+    }
+  }
+
+  private var compatibilityIsEditable: Bool {
+    !model.isBusy && model.activePolicy(id: policyID) != nil && !model.isPolicyDirty(policyID)
+      && model.systemCompatibilityCatalogMatchesExtension
+  }
+
+  private var compatibilityDisabledReason: String? {
+    if model.activePolicy(id: policyID) == nil || model.isPolicyDirty(policyID) {
+      return String(localized: "Save this policy first.")
+    }
+    if !model.systemCompatibilityCatalogMatchesExtension {
+      return String(localized: "The app and extension must use the same built-in definitions.")
+    }
+    return nil
+  }
+
+  // MARK: - Saving
+
+  private var isDirty: Bool { model.isPolicyDirty(policyID) }
+
+  private var validationMessage: String? {
+    isDirty ? model.draftValidationMessage(for: policyID) : nil
+  }
+
+  private var canSave: Bool {
+    !model.isBusy && isDirty && validationMessage == nil
+  }
+
+  private var canRevert: Bool {
+    !model.isBusy && isDirty
+  }
+
+  private func save() {
+    Task { await model.savePolicy(id: policyID) }
+  }
+
+  /// The prominent Save button when the draft can be saved, otherwise a plain disabled one.
+  @ViewBuilder
+  private var saveButton: some View {
+    if canSave {
+      Button("Save") {
+        save()
       }
       .buttonStyle(.borderedProminent)
-      .keyboardShortcut("s", modifiers: .command)
-      .disabled(
-        model.isBusy || !model.isPolicyDirty(policyID)
-          || model.draftValidationMessage(for: policyID) != nil
-      )
-    }
-    .padding(.horizontal, 20)
-    .padding(.vertical, 12)
-    .background(.bar)
-    .overlay(alignment: .top) {
-      Divider()
+    } else {
+      Button(model.isBusy ? "Saving…" : "Save") {}
+        .disabled(true)
     }
   }
 
-  // MARK: - Bindings
+  private struct Notice {
+    let text: String
+    let systemImage: String
+    let color: Color
+  }
+
+  /// Switches to the Log tab when another screen asked to show one of this policy's records.
+  private func takePendingLogRequest() {
+    guard model.pendingPolicyLogPolicyID == policyID else { return }
+    tab = .log
+    model.pendingPolicyLogPolicyID = nil
+  }
+
+  /// The latest error or a reason the draft can't be saved. Results of extension requests are
+  /// shown in Settings, where those requests are made.
+  private var notice: Notice? {
+    if let error = model.lastError {
+      return Notice(text: error, systemImage: "xmark.octagon", color: .red)
+    }
+    if let validationMessage {
+      return Notice(text: validationMessage, systemImage: "exclamationmark.circle", color: .orange)
+    }
+    return nil
+  }
+
+  private var folderPath: String? {
+    guard let path = model.policyDraft(id: policyID)?.protectedRootPath, !path.isEmpty else {
+      return nil
+    }
+    return path
+  }
+
+  // MARK: - Titles and messages
+
+  private var title: String {
+    guard let draft = model.policyDraft(id: policyID) else { return String(localized: "Policy") }
+    return draft.name.isEmpty ? String(localized: "Untitled Policy") : draft.name
+  }
+
+  private var subtitle: String {
+    guard let draft = model.policyDraft(id: policyID) else { return "" }
+    if model.activePolicy(id: policyID) == nil {
+      return String(localized: "Not saved yet")
+    }
+    if model.isPolicyDirty(policyID) {
+      return String(localized: "Unsaved changes")
+    }
+    if draft.mode == .audit {
+      return String(
+        localized:
+          "\(draft.mode.displayName) · \(draft.policyType.displayName) · Nothing is blocked")
+    }
+    return "\(draft.mode.displayName) · \(draft.policyType.displayName)"
+  }
+
+  private func typeChangeMessage(_ request: PolicyTypeChangeRequest) -> String {
+    switch request.targetType {
+    case .blacklist:
+      String(
+        localized:
+          "The \(request.ruleCount) programs in the list will be denied instead of allowed. The change applies when you save."
+      )
+    case .whitelist:
+      String(
+        localized:
+          "Only the \(request.ruleCount) programs in the list will be allowed. The change applies when you save."
+      )
+    }
+  }
+
+  private var protectionSwitchMessage: String {
+    let denied = model.projectedDenials(policyID: policyID)
+    var parts: [String] = []
+    if denied.isEmpty {
+      parts.append(String(localized: "No program in the loaded records would be denied."))
+    } else {
+      let names = denied.prefix(5).map(\.displayName).joined(separator: ", ")
+      let remaining = denied.count - min(denied.count, 5)
+      let list =
+        remaining > 0 ? String(localized: "\(names) and \(remaining) more") : names
+      parts.append(
+        String(
+          localized:
+            "Based on the loaded records, opens from these programs would be denied: \(list)."))
+    }
+    parts.append(String(localized: "The change is saved and applied right away."))
+    if let draft = model.policyDraft(id: policyID),
+      let active = model.activePolicy(id: policyID),
+      draft.makePolicy() != active
+    {
+      parts.append(String(localized: "Other unsaved changes to this policy are saved too."))
+    }
+    return parts.joined(separator: " ")
+  }
+
+  // MARK: - Bindings and actions
 
   private var nameBinding: Binding<String> {
     Binding(
@@ -458,7 +473,7 @@ struct PolicyView: View {
     )
   }
 
-  private var policyTypeBinding: Binding<PolicyType> {
+  private var typeBinding: Binding<PolicyType> {
     Binding(
       get: {
         if let pendingTypeChange, pendingTypeChange.policyID == policyID {
@@ -484,213 +499,116 @@ struct PolicyView: View {
     )
   }
 
-  private var protectedRootBinding: Binding<String> {
+  private func enabledBinding(for rule: PolicyRule) -> Binding<Bool> {
     Binding(
-      get: { model.policyDraft(id: policyID)?.protectedRootPath ?? "" },
+      get: { currentRule(rule.id)?.isEnabled ?? rule.isEnabled },
       set: { value in
-        model.updatePolicyDraft(id: policyID) { $0.protectedRootPath = value }
+        guard var updated = currentRule(rule.id) else { return }
+        updated.isEnabled = value
+        model.updateRule(policyID: policyID, rule: updated)
       }
     )
   }
 
-  private func modeAndTypeExplanation(for draft: DirectoryPolicyDraft) -> String {
-    switch (draft.mode, draft.policyType) {
-    case (.protection, .whitelist):
-      "Matching enabled rules are allowed; programs without a matching rule are denied unless a system-compatibility exception applies."
-    case (.protection, .blacklist):
-      "Matching enabled rules are denied; every other program is allowed."
-    case (.audit, .whitelist):
-      "Records whether the whitelist would allow or deny, but never blocks."
-    case (.audit, .blacklist):
-      "Records whether the blacklist would deny or allow, but never blocks."
-    }
+  private func currentRule(_ ruleID: String) -> PolicyRule? {
+    guard let rules = model.policyDraft(id: policyID)?.rules else { return nil }
+    return rules.first(where: { $0.id == ruleID })
   }
 
-  private func emptyRulesMessage(for draft: DirectoryPolicyDraft) -> String {
-    if draft.policyType == .whitelist {
-      return "No rules. No program is explicitly allowed by this policy."
-    }
-    return "No rules. This policy is valid but currently matches no program identity."
+  private var typeChangeIsPresented: Binding<Bool> {
+    Binding(
+      get: { pendingTypeChange != nil },
+      set: { isPresented in
+        if !isPresented { pendingTypeChange = nil }
+      }
+    )
   }
 
+  private func apply(_ request: PolicyTypeChangeRequest, deletingAllRules: Bool) {
+    model.applyPolicyTypeChange(
+      policyID: request.policyID,
+      to: request.targetType,
+      deletingAllRules: deletingAllRules
+    )
+    pendingTypeChange = nil
+  }
+
+  private func setFolder(_ url: URL) {
+    let path = ProtectedFolderCheck.canonicalPath(for: url)
+    model.updatePolicyDraft(id: policyID) { $0.protectedRootPath = path }
+  }
+
+  private func revealFolder() {
+    guard let folderPath else { return }
+    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: folderPath)])
+  }
 }
 
-private enum PolicyEditorTab: Hashable {
+/// The protected folder's path. It can be typed in place, like the name, or chosen with a panel.
+/// Typed text is applied when editing ends; Escape restores the current path.
+private struct FolderPathRow: View {
+  let path: String
+  /// True for a new policy, whose folder is the first thing to enter.
+  let isFocusRequested: Bool
+  let commit: (String) -> Void
+  let choose: () -> Void
+  let onFocus: () -> Void
+
+  @State private var text = ""
+  @FocusState private var isEditing: Bool
+
+  var body: some View {
+    LabeledContent {
+      HStack {
+        TextField("Protected Folder", text: $text, prompt: Text("No folder chosen"))
+          .labelsHidden()
+          .textFieldStyle(.plain)
+          .multilineTextAlignment(.trailing)
+          .focused($isEditing)
+          .onSubmit(apply)
+          .onExitCommand {
+            text = displayText
+            isEditing = false
+          }
+          .help(path)
+        Button("Choose…", action: choose)
+      }
+    } label: {
+      Text("Protected Folder")
+      if let issue = ProtectedFolderCheck.issue(for: path), issue != .notChosen {
+        Text(issue.userFacingMessage)
+          .foregroundStyle(.orange)
+      }
+    }
+    .onAppear {
+      text = displayText
+      if isFocusRequested {
+        isEditing = true
+        onFocus()
+      }
+    }
+    .onChange(of: path) { text = displayText }
+    .onChange(of: isEditing) {
+      if !isEditing { apply() }
+    }
+  }
+
+  private var displayText: String {
+    path.isEmpty ? "" : PathText.abbreviated(path)
+  }
+
+  private func apply() {
+    guard text != displayText else { return }
+    commit(text)
+  }
+}
+
+enum PolicyEditorTab: Hashable {
   case settings
   case log
 }
 
-// MARK: - Rule row
-
-private struct RuleEditorRow: View {
-  @Binding var rule: PolicyRule
-  let policyType: PolicyType
-  let displayName: String
-  let onDelete: () -> Void
-
-  @State private var isExpanded: Bool
-
-  init(
-    rule: Binding<PolicyRule>,
-    policyType: PolicyType,
-    displayName: String,
-    onDelete: @escaping () -> Void
-  ) {
-    self._rule = rule
-    self.policyType = policyType
-    self.displayName = displayName
-    self.onDelete = onDelete
-    self._isExpanded = State(initialValue: rule.wrappedValue.signingIdentifier.isEmpty)
-  }
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      HStack(spacing: 12) {
-        IconTile(systemImage: rule.kind.symbolName, tint: .secondary, size: 30)
-        VStack(alignment: .leading, spacing: 1) {
-          titleText
-            .lineLimit(1)
-          Text(identitySummary)
-            .font(.caption.monospaced())
-            .foregroundStyle(.secondary)
-        }
-        Spacer(minLength: 12)
-        Toggle("Enabled", isOn: $rule.isEnabled)
-          .toggleStyle(.switch)
-          .labelsHidden()
-          .controlSize(.small)
-          .help(
-            rule.isEnabled
-              ? "Rule participates in decisions"
-              : "Rule is excluded from decisions"
-          )
-        Button {
-          withAnimation(.easeInOut(duration: 0.15)) {
-            isExpanded.toggle()
-          }
-        } label: {
-          Image(systemName: "chevron.right")
-            .rotationEffect(.degrees(isExpanded ? 90 : 0))
-        }
-        .buttonStyle(.borderless)
-        .help(isExpanded ? "Collapse rule details" : "Edit rule details")
-        Button(role: .destructive, action: onDelete) {
-          Image(systemName: "trash")
-        }
-        .buttonStyle(.borderless)
-        .help("Remove this rule")
-      }
-
-      if isExpanded {
-        expandedEditor
-          .padding(.leading, 42)
-          .padding(.top, 10)
-          .padding(.bottom, 2)
-      }
-    }
-    .opacity(rule.isEnabled ? 1 : 0.6)
-    .onChange(of: rule.kind) { _, kind in
-      rule.teamIdentifier = kind == .teamSigned ? (rule.teamIdentifier ?? "") : nil
-    }
-  }
-
-  private var titleText: Text {
-    var text =
-      Text(displayName).font(.body.weight(.medium))
-      + Text(" · \(rule.kind.displayName)").foregroundStyle(.secondary)
-    if rule.allowsDescendants {
-      text = text + Text(" · Descendants").foregroundStyle(.orange)
-    }
-    if !rule.isEnabled {
-      text = text + Text(" · disabled, excluded from decisions").foregroundStyle(.secondary)
-    }
-    return text
-  }
-
-  private var expandedEditor: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      Grid(alignment: .leading, verticalSpacing: 6) {
-        GridRow {
-          Text("Kind")
-            .foregroundStyle(.secondary)
-            .gridColumnAlignment(.trailing)
-          Picker("Kind", selection: $rule.kind) {
-            Text("Team signed").tag(PolicyRuleKind.teamSigned)
-            Text("Apple platform").tag(PolicyRuleKind.platformBinary)
-          }
-          .labelsHidden()
-          .fixedSize()
-        }
-        if rule.kind == .teamSigned {
-          GridRow {
-            Text("Team ID")
-              .foregroundStyle(.secondary)
-              .gridColumnAlignment(.trailing)
-            TextField(
-              "Team ID",
-              text: Binding(
-                get: { rule.teamIdentifier ?? "" },
-                set: { rule.teamIdentifier = $0.uppercased() }
-              )
-            )
-            .textFieldStyle(.roundedBorder)
-            .font(.body.monospaced())
-            .labelsHidden()
-            .frame(width: 260)
-          }
-        }
-        GridRow {
-          Text("Signing ID")
-            .foregroundStyle(.secondary)
-            .gridColumnAlignment(.trailing)
-          TextField("Signing ID", text: $rule.signingIdentifier)
-            .textFieldStyle(.roundedBorder)
-            .font(.body.monospaced())
-            .labelsHidden()
-            .frame(width: 260)
-        }
-      }
-
-      VStack(alignment: .leading, spacing: 2) {
-        Toggle(descendantsLabel, isOn: $rule.allowsDescendants)
-          .toggleStyle(.checkbox)
-        if rule.allowsDescendants {
-          Text(descendantsWarning)
-            .font(.caption)
-            .foregroundStyle(.orange)
-        }
-      }
-    }
-    .font(.callout)
-  }
-
-  private var descendantsLabel: String {
-    policyType == .whitelist ? "Allow observed descendants" : "Block observed descendants"
-  }
-
-  private var descendantsWarning: String {
-    if policyType == .whitelist {
-      return "Trusts every observed child process — even one that runs a different program."
-    }
-    return "Blocks every observed child process — even after it runs a different program."
-  }
-
-  private var identitySummary: String {
-    switch rule.kind {
-    case .teamSigned:
-      let team = rule.teamIdentifier?.isEmpty == false ? rule.teamIdentifier! : "—"
-      let signing = rule.signingIdentifier.isEmpty ? "—" : rule.signingIdentifier
-      return "\(team) · \(signing)"
-    case .platformBinary:
-      let signing = rule.signingIdentifier.isEmpty ? "—" : rule.signingIdentifier
-      return "\(signing) · platform binary"
-    }
-  }
-}
-
-// MARK: - Type change sheet
-
-// Keep presentation and its content together so the sheet can never be empty.
+// Keep presentation and its content together so the confirmation can never be empty.
 private struct PolicyTypeChangeRequest: Identifiable {
   let id = UUID()
   let policyID: UUID
@@ -699,164 +617,109 @@ private struct PolicyTypeChangeRequest: Identifiable {
   let ruleCount: Int
 }
 
-private struct PolicyTypeChangeSheet: View {
-  let currentType: PolicyType
-  let targetType: PolicyType
-  let ruleCount: Int
-  let onConfirm: (Bool) -> Void
-  let onCancel: () -> Void
+// MARK: - Rule row
 
-  @State private var deletingAllRules = false
-  @State private var showsDeletedFeedback = false
-  @State private var feedbackTask: Task<Void, Never>?
+private struct RuleRow: View {
+  let rule: PolicyRule
+  let displayName: String
+  @Binding var isEnabled: Bool
+  let onEdit: () -> Void
+  let onRemove: () -> Void
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 16) {
-      Text("Change policy type?")
-        .font(.title3.weight(.semibold))
-      Text(
-        "Changing from \(currentType.displayName) to \(targetType.displayName) reverses the meaning of \(ruleCount) existing rules and any currently observed descendants."
-      )
-      .foregroundStyle(.secondary)
-
-      HStack {
-        Button(showsDeletedFeedback ? "Deleted!" : "Delete All Rules", role: .destructive) {
-          deletingAllRules = true
-          showDeletedFeedback()
+    HStack {
+      ProgramIcon(signingIdentifier: rule.signingIdentifier, executablePath: nil, size: 32)
+      VStack(alignment: .leading) {
+        HStack {
+          Text(displayName)
+            .lineLimit(1)
+          if rule.allowsDescendants {
+            Text("Includes child processes")
+              .font(.caption)
+              .foregroundStyle(.orange)
+          }
+          if !isEnabled {
+            Text("Off")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
         }
-        Spacer()
-        Button("Cancel", action: onCancel)
-          .keyboardShortcut(.cancelAction)
-        Button("Confirm") { onConfirm(deletingAllRules) }
-          .buttonStyle(.borderedProminent)
-          .keyboardShortcut(.defaultAction)
+        SignatureLine(kind: rule.kind.displayName, identifiers: identity)
       }
+      .foregroundStyle(isEnabled ? .primary : .secondary)
+      Spacer()
+      Toggle("Use this rule", isOn: $isEnabled)
+        .toggleStyle(.switch)
+        .labelsHidden()
+      Menu {
+        Button("Edit…", action: onEdit)
+        Button("Remove", role: .destructive, action: onRemove)
+      } label: {
+        Label("More actions for \(displayName)", systemImage: "ellipsis.circle")
+          .labelStyle(.iconOnly)
+      }
+      .menuStyle(.borderlessButton)
+      .menuIndicator(.hidden)
+      .fixedSize()
     }
-    .padding(22)
-    .interactiveDismissDisabled()
-    .onDisappear { feedbackTask?.cancel() }
+    .contextMenu {
+      Button("Edit…", action: onEdit)
+      Button("Remove", role: .destructive, action: onRemove)
+    }
   }
 
-  private func showDeletedFeedback() {
-    feedbackTask?.cancel()
-    showsDeletedFeedback = true
-    feedbackTask = Task {
-      try? await Task.sleep(for: .seconds(1))
-      guard !Task.isCancelled else { return }
-      showsDeletedFeedback = false
+  private var identity: String {
+    switch rule.kind {
+    case .teamSigned:
+      "\(rule.teamIdentifier ?? "—") · \(rule.signingIdentifier)"
+    case .platformBinary:
+      rule.signingIdentifier
     }
   }
 }
 
-// MARK: - Audit rule picker
+// MARK: - Compatibility profile row
 
-private struct AuditRulePicker: View {
-  @Bindable var model: AppModel
-  let policyID: UUID
-
-  @Environment(\.dismiss) private var dismiss
-  @State private var filterText = ""
+private struct CompatibilityProfileRow: View {
+  let item: SystemCompatibilityProfileItem
+  let isEditable: Bool
+  let disabledReason: String?
+  let setEnabled: (Bool) -> Void
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      HStack(alignment: .top) {
-        VStack(alignment: .leading, spacing: 2) {
-          Text("Choose from Audit Log")
-            .font(.title3.weight(.semibold))
-          Text(
-            "Signed identities from the newest 500 loaded records. Paths and names are display-only — rules store signing identity."
-          )
-          .font(.caption)
-          .foregroundStyle(.secondary)
+    HStack(alignment: .top) {
+      Label {
+        HStack {
+          Text(item.profile.displayName)
+          Text(item.state.displayName)
+            .foregroundStyle(stateTint)
         }
-        Spacer()
-        TextField("Filter programs", text: $filterText)
-          .textFieldStyle(.roundedBorder)
-          .frame(width: 200)
+        Text(item.profile.roleDescription)
+        Text(item.profile.consequence)
+          .foregroundStyle(.orange)
+      } icon: {
+        Image(systemName: "puzzlepiece.extension")
       }
-
-      if filteredCandidates.isEmpty {
-        ContentUnavailableView(
-          "No supported signed programs",
-          systemImage: "list.bullet.rectangle",
-          description: Text(
-            "Records without a complete Team ID + Signing ID or platform-binary identity are excluded."
-          )
-        )
-      } else {
-        List(filteredCandidates) { candidate in
-          HStack(alignment: .top, spacing: 12) {
-            IconTile(systemImage: candidate.kind.symbolName, tint: .secondary, size: 32)
-            VStack(alignment: .leading, spacing: 2) {
-              (Text(candidate.displayName).font(.body.weight(.medium))
-                + Text(" · \(candidate.kind.displayName)").foregroundStyle(.secondary))
-                .lineLimit(1)
-              Text(identitySummary(candidate))
-                .font(.caption.monospaced())
-                .foregroundStyle(.secondary)
-              if let path = candidate.executablePath {
-                Text(path)
-                  .font(.caption2.monospaced())
-                  .foregroundStyle(.tertiary)
-              }
-              Text(
-                "Last seen \(candidate.lastSeen.formatted()) · \(candidate.observationCount) observations · latest: \(candidate.latestResult)"
-              )
-              .font(.caption2)
-              .foregroundStyle(.secondary)
-            }
-            Spacer()
-            let alreadyExists = model.policyContainsIdentity(
-              policyID: policyID,
-              candidate: candidate
-            )
-            Button(alreadyExists ? "Already Added" : "Add") {
-              do {
-                try model.addRule(policyID: policyID, from: candidate)
-                dismiss()
-              } catch {
-                model.lastError = String(describing: error)
-              }
-            }
-            .disabled(alreadyExists)
-          }
-          .padding(.vertical, 3)
-        }
-        .listStyle(.inset)
+      Spacer()
+      Button(buttonTitle) {
+        setEnabled(item.state.needsReview ? true : !item.isEnabled)
       }
-
-      HStack {
-        Text("Records without a complete supported signing identity are excluded.")
-          .font(.caption)
-          .foregroundStyle(.tertiary)
-        Spacer()
-        Button("Refresh") {
-          Task { await model.refreshAuditLog() }
-        }
-        Button("Cancel") { dismiss() }
-          .keyboardShortcut(.cancelAction)
-      }
-    }
-    .padding()
-    .task { await model.refreshAuditLog() }
-  }
-
-  private var filteredCandidates: [AuditRuleCandidate] {
-    let needle = filterText.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !needle.isEmpty else { return model.auditRuleCandidates }
-    return model.auditRuleCandidates.filter {
-      [$0.displayName, $0.signingIdentifier, $0.teamIdentifier, $0.executablePath]
-        .compactMap { $0 }
-        .contains { $0.localizedCaseInsensitiveContains(needle) }
+      .disabled(!isEditable)
+      .help(disabledReason ?? "")
     }
   }
 
-  private func identitySummary(_ candidate: AuditRuleCandidate) -> String {
-    switch candidate.kind {
-    case .teamSigned:
-      "\(candidate.teamIdentifier ?? "—") · \(candidate.signingIdentifier)"
-    case .platformBinary:
-      "\(candidate.signingIdentifier) · platform binary"
+  private var buttonTitle: String {
+    if item.state.needsReview { return String(localized: "Review and Turn On") }
+    return item.isEnabled ? String(localized: "Turn Off") : String(localized: "Turn On")
+  }
+
+  private var stateTint: Color {
+    switch item.state {
+    case .active: .green
+    case .disabled: .secondary
+    case .needsReview, .missingProfile, .unsupportedOS, .policyContextChanged, .policyMissing:
+      .orange
     }
   }
 }

@@ -138,6 +138,7 @@ public struct LineageIssue: Codable, Equatable, Sendable, Identifiable {
       "The parent execution identity was not available; the chain cannot be continued here."
     case "kernelEventLoss":
       "macOS event delivery contained gaps. Unobserved transitions cannot be reconstructed."
+    case "sequenceRestarted": "The event sequence restarted within this collection."
     case "queueOverflow": "The process-history queue could not accept some observations."
     case "historyOmitted":
       "Process history was omitted to preserve the access record under load."

@@ -15,7 +15,7 @@ public struct ExtensionStorageLocations: Equatable, Sendable {
   public let auditFile: URL
 
   public init(rootDirectory: URL) {
-    let standardizedRoot = rootDirectory.standardizedFileURL
+    let standardizedRoot = PhysicalPath.resolve(rootDirectory)
     self.rootDirectory = standardizedRoot
     self.legacyPolicyFile = standardizedRoot.appendingPathComponent(
       Self.legacyPolicyFilename, isDirectory: false)

@@ -22,7 +22,9 @@ struct ProductVersion: Equatable {
   }
 
   var description: String {
-    "\(version.flatMap { $0.isEmpty ? nil : $0 } ?? "Unknown") · Build \(build ?? "Unknown")"
+    let versionText = version.flatMap { $0.isEmpty ? nil : $0 } ?? String(localized: "Unknown")
+    let buildText = build ?? String(localized: "Unknown")
+    return String(localized: "\(versionText) (build \(buildText))")
   }
 
   func matches(_ other: Self) -> Bool {
@@ -49,11 +51,13 @@ struct ExtensionVersionOverview {
 
   let app: ProductVersion
   let included: ProductVersion
-  var active = "Checking…"
-  var comparison = "Checking versions"
+  var active = String(localized: "Checking…")
+  var comparison = String(localized: "Checking versions")
   var tone: Tone = .neutral
   var notices: [Notice] = []
   var entries: [Entry] = []
+  /// True only when macOS reported the installations within the freshness interval.
+  var isConfirmed = false
 
   init(
     app: ProductVersion,
@@ -73,22 +77,26 @@ struct ExtensionVersionOverview {
       (0...HealthStateReducer.runtimeFreshnessInterval).contains(now.timeIntervalSince(observedAt))
     else {
       if observedAt != nil || queryError != nil {
-        active = "Unable to confirm"
-        comparison = "Version check unavailable"
+        active = String(localized: "Can’t confirm")
+        comparison = String(localized: "Version check unavailable")
         tone = .attention
         notices.append(
           Notice(
             id: "unavailable",
-            text: queryError.map { "Could not refresh extension versions: \($0)" }
-              ?? "Extension version information is out of date. Refresh to check again."
+            text: queryError.map {
+              String(localized: "Could not refresh extension versions: \($0)")
+            }
+              ?? String(
+                localized: "Extension version information is out of date. Refresh to check again.")
           ))
       }
       if isRequestingActivation {
-        comparison = activationProgress ?? "Updating extension…"
+        comparison = activationProgress ?? String(localized: "Updating the extension…")
         tone = .neutral
       }
       return
     }
+    isConfirmed = true
 
     let matching = installations.filter {
       $0.bundleIdentifier == ActivationController.extensionIdentifier
@@ -100,12 +108,15 @@ struct ExtensionVersionOverview {
     }
     entries = matching.enumerated().map { index, item in
       var states: [String] = []
-      if item.isEnabled { states.append("Enabled") }
-      if item.isAwaitingUserApproval { states.append("Approval pending") }
+      if item.isEnabled { states.append(String(localized: "In use")) }
+      if item.isAwaitingUserApproval { states.append(String(localized: "Waiting for approval")) }
       if item.isUninstalling {
-        states.append(item.isEnabled ? "Removal pending" : "Restart cleanup pending")
+        states.append(
+          item.isEnabled
+            ? String(localized: "Removal pending")
+            : String(localized: "Cleanup after restart"))
       }
-      if states.isEmpty { states.append("Not active") }
+      if states.isEmpty { states.append(String(localized: "Not active")) }
       return Entry(
         id: index, version: ProductVersion(installation: item).description,
         state: states.joined(separator: " · ")
@@ -117,31 +128,33 @@ struct ExtensionVersionOverview {
     let activeVersions = activeItems.map { ProductVersion(installation: $0) }
     active =
       activeVersions.isEmpty
-      ? "None reported by macOS" : activeVersions.map(\.description).joined(separator: ", ")
+      ? String(localized: "None reported by macOS")
+      : activeVersions.map(\.description).joined(separator: ", ")
 
     if activeVersions.count > 1 {
-      comparison = "Multiple active versions"
+      comparison = String(localized: "Multiple active versions")
       tone = .attention
     } else if let running = activeVersions.first {
       if !app.isKnown || !running.isKnown || !included.isKnown {
-        comparison = "Version information incomplete"
+        comparison = String(localized: "Version information incomplete")
         tone = .attention
       } else if !app.matches(included) {
-        comparison = "App bundle versions differ"
+        comparison = String(localized: "The app and its included extension differ")
         tone = .attention
       } else if app.matches(running) {
-        comparison = "Versions match"
+        comparison = String(localized: "Versions match")
         tone = .matching
       } else {
-        comparison = "App and extension differ"
+        comparison = String(localized: "The app and running extension differ")
         tone = .attention
         notices.append(
           Notice(
-            id: "mismatch", text: "The active protection extension does not match this app."
+            id: "mismatch",
+            text: String(localized: "The running protection extension does not match this app.")
           ))
       }
     } else {
-      comparison = "No active extension"
+      comparison = String(localized: "No running extension")
       tone = .attention
     }
 
@@ -149,8 +162,10 @@ struct ExtensionVersionOverview {
       notices.append(
         Notice(
           id: "bundleMismatch",
-          text:
-            "The app and its included extension have different versions. Reinstall a matching package."
+          text: String(
+            localized:
+              "The app and its included extension have different versions. Reinstall a matching package."
+          )
         ))
     }
 
@@ -158,46 +173,53 @@ struct ExtensionVersionOverview {
       let version = ProductVersion(installation: item).description
       if !ProductVersion(installation: item).isKnown {
         notices.append(
-          Notice(id: "unknown-\(index)", text: "Incomplete version information: \(version)."))
+          Notice(
+            id: "unknown-\(index)",
+            text: String(localized: "Incomplete version information: \(version)")))
       }
       if item.isUninstalling {
         notices.append(
           Notice(
             id: "removal-\(index)",
             text: item.isEnabled
-              ? "\(version): removal pending; macOS still reports it enabled."
-              : "\(version): not active; removal is waiting for a restart."
+              ? String(localized: "\(version): removal pending; macOS still reports it in use.")
+              : String(
+                localized: "\(version): not running; macOS will clean it up after a restart.")
           ))
       }
       if item.isAwaitingUserApproval {
         notices.append(
           Notice(
-            id: "approval-\(index)", text: "\(version): approval is pending in System Settings."
+            id: "approval-\(index)",
+            text: String(localized: "\(version): waiting for approval in System Settings.")
           ))
       }
       if !item.isEnabled, !item.isUninstalling, !item.isAwaitingUserApproval {
         notices.append(
           Notice(
-            id: "inactive-\(index)", text: "\(version): installed but not active."
+            id: "inactive-\(index)",
+            text: String(localized: "\(version): installed but not running.")
           ))
       }
     }
 
     if isRequestingActivation {
-      comparison = activationProgress ?? "Updating extension…"
+      comparison = activationProgress ?? String(localized: "Updating the extension…")
       tone = .neutral
     } else if tone != .matching {
       switch activationOutcome {
       case .requiresRestart:
-        comparison = "Restart to apply extension update"
+        comparison = String(localized: "Restart to finish the extension update")
         notices.append(
           Notice(
             id: "updateRestart",
-            text: "macOS requires a restart to finish activating the new extension."
+            text: String(localized: "macOS needs a restart to finish activating the new extension.")
           ))
       case .failed(let description):
         notices.append(
-          Notice(id: "updateFailed", text: "Extension activation failed: \(description)"))
+          Notice(
+            id: "updateFailed",
+            text: String(localized: "The extension could not be activated: \(description)")))
       case .completed, nil:
         break
       }

@@ -1,0 +1,7 @@
+/* Shown when Pasu FS is running while the installer starts. */
+"QUIT_APP_TITLE" = "설치하기 전에 Pasu FS를 종료하세요";
+"QUIT_APP_MESSAGE" = "Pasu FS가 실행 중입니다. 평소처럼 종료한 뒤 이 설치 프로그램을 닫았다가 다시 여세요. 앱을 종료해도 보호는 계속됩니다. 업데이트할 때는 ‘보호 중단 후 종료’를 사용하지 마세요.";
+
+/* Shown when the installer cannot list running applications. */
+"CHECK_FAILED_TITLE" = "실행 중인 앱을 확인할 수 없습니다";
+"CHECK_FAILED_MESSAGE" = "Pasu FS를 닫고 이 설치 프로그램을 다시 여세요. 응용 프로그램 파일은 변경되지 않았습니다.";

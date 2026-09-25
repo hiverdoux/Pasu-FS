@@ -1,0 +1,23 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "NSSystemExtensionUsageDescription" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pasu FS uses an Endpoint Security system extension to protect user-selected test directories."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pasu FS는 Endpoint Security 시스템 확장 프로그램으로 사용자가 선택한 시험용 폴더를 보호합니다."
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

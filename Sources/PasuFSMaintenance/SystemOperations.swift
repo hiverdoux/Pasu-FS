@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import PasuFSConfiguration
+import PasuFSHostCore
 import PasuFSIPC
 import PasuFSMaintenanceCore
 
@@ -29,7 +30,9 @@ enum SystemOperations {
     let result = try run(path, arguments)
     guard result.status == 0 else {
       throw MaintenanceError(
-        "\(URL(fileURLWithPath: path).lastPathComponent) failed (\(result.status)): \(result.output.prefix(2000))"
+        .commandFailed,
+        detail:
+          "\(URL(fileURLWithPath: path).lastPathComponent) failed (\(result.status)): \(result.output.prefix(2000))"
       )
     }
   }
@@ -37,7 +40,7 @@ enum SystemOperations {
   static func runningApplications(excluding excludedPID: Int32? = nil) throws -> [Int32] {
     let result = try run("/bin/ps", ["-ww", "-axo", "pid=,comm="])
     guard result.status == 0 else {
-      throw MaintenanceError("Could not check running Pasu FS applications.")
+      throw MaintenanceError(.runningApplicationsUnknown)
     }
     return result.output.split(separator: "\n").compactMap { line in
       let fields = line.split(maxSplits: 1, whereSeparator: { $0.isWhitespace })
@@ -50,9 +53,7 @@ enum SystemOperations {
 
   static func requireNoRunningApplications(excluding pid: Int32? = nil) throws {
     guard try runningApplications(excluding: pid).isEmpty else {
-      throw MaintenanceError(
-        "Quit Pasu FS normally, then run the installer or uninstaller again. Protection continues when the app quits. Another login session may also have Pasu FS open."
-      )
+      throw MaintenanceError(.applicationRunning)
     }
   }
 
@@ -61,7 +62,7 @@ enum SystemOperations {
     let app = URL(fileURLWithPath: MaintenanceContract.appPath)
     var metadata = stat()
     let present = lstat(app.path, &metadata) == 0
-    if !present, errno != ENOENT { throw MaintenanceError("Cannot inspect the installation path.") }
+    if !present, errno != ENOENT { throw MaintenanceError(.installationPathUnreadable) }
     var currentVersion: String?
     let receipt = try run(
       "/usr/sbin/pkgutil", ["--pkg-info-plist", MaintenanceContract.packageIdentifier])
@@ -73,8 +74,7 @@ enum SystemOperations {
     let receiptVersion = receiptInfo?["pkg-version"] as? String
     if present {
       guard metadata.st_mode & S_IFMT == S_IFDIR else {
-        throw MaintenanceError(
-          "The Pasu FS installation path is not a real directory. No files were changed.")
+        throw MaintenanceError(.installationPathNotDirectory)
       }
       let info = NSDictionary(contentsOf: app.appendingPathComponent("Contents/Info.plist"))
       let identifier = info?["CFBundleIdentifier"] as? String
@@ -82,13 +82,11 @@ enum SystemOperations {
         identifier == PasuFSXPC.hostBundleIdentifier
           || (identifier == nil && receiptVersion != nil && metadata.st_uid == 0)
       else {
-        throw MaintenanceError(
-          "Another application or an unrecognized directory occupies the installation path.")
+        throw MaintenanceError(.installationPathOccupied)
       }
       currentVersion = info?["CFBundleVersion"] as? String ?? receiptVersion
       guard currentVersion != nil else {
-        throw MaintenanceError(
-          "The existing application has no readable build version or package receipt.")
+        throw MaintenanceError(.installedVersionUnreadable)
       }
     }
     try ProductBuildVersion.validateUpgrade(incoming: incomingVersion, installed: currentVersion)
@@ -108,8 +106,7 @@ enum SystemOperations {
       guard lstat(path, &info) == 0, info.st_uid == 0,
         info.st_mode & S_IFMT == S_IFREG, info.st_mode & 0o022 == 0
       else {
-        throw MaintenanceError(
-          "The installed maintenance component has unsafe ownership or permissions.")
+        throw MaintenanceError(.componentPermissionsUnsafe)
       }
     }
     let embedded = app.appendingPathComponent(MaintenanceContract.embeddedHelperPath)
@@ -117,15 +114,36 @@ enum SystemOperations {
     let installedRequirement = try CodeSigningRequirementResolver.designatedRequirement(
       forCodeAt: URL(fileURLWithPath: MaintenanceContract.helperPath), requireRootOwnedBundle: true)
     guard installedRequirement == requirement else {
-      throw MaintenanceError("The maintenance service signature does not match this application.")
+      throw MaintenanceError(.helperSignatureMismatch)
     }
     // The installed executable must be precisely the one sealed into this application.
     guard
       try Data(contentsOf: embedded)
         == Data(contentsOf: URL(fileURLWithPath: MaintenanceContract.helperPath))
     else {
+      throw MaintenanceError(.helperMismatch)
+    }
+  }
+
+  /// Registers the product's authorization rights with the installed app's prompt translations.
+  static func registerAuthorizationRights() throws {
+    let app = URL(fileURLWithPath: MaintenanceContract.appPath)
+    guard let bundle = CFBundleCreate(nil, app as CFURL) else {
       throw MaintenanceError(
-        "The installed helper does not match the application. Reinstall the package.")
+        .authorizationRightsNotRegistered, detail: "\(app.path) is not a bundle")
+    }
+    do {
+      try AdministrativeAuthorizationRegistry.register(localizationsFrom: bundle)
+    } catch {
+      throw MaintenanceError(.authorizationRightsNotRegistered, detail: String(describing: error))
+    }
+  }
+
+  static func removeAuthorizationRights() throws {
+    do {
+      try AdministrativeAuthorizationRegistry.remove()
+    } catch {
+      throw MaintenanceError(.authorizationRightsNotRemoved, detail: String(describing: error))
     }
   }
 
@@ -140,7 +158,7 @@ enum SystemOperations {
     let deadline = Date().addingTimeInterval(30)
     while kill(session.processID, 0) == 0 || errno == EPERM {
       guard Date() < deadline else {
-        throw MaintenanceError("Pasu FS did not exit. Open the app and retry uninstalling.")
+        throw MaintenanceError(.applicationDidNotExit)
       }
       Thread.sleep(forTimeInterval: 0.1)
     }
@@ -165,14 +183,14 @@ enum SystemOperations {
     if receipt.status == 0 {
       try require("/usr/sbin/pkgutil", ["--forget", MaintenanceContract.packageIdentifier])
     } else if !receipt.output.contains("No receipt") {
-      throw MaintenanceError(
-        "Could not verify the package receipt during removal: \(receipt.output)")
+      throw MaintenanceError(.receiptUnverifiable, detail: receipt.output)
     }
+    try removeAuthorizationRights()
     // All failures above retain the helper and its registration for package repair and retry.
     try stateStore.clear()
     if session.removeData {
       guard rmdir(locations.rootDirectory.path) == 0 || errno == ENOENT else {
-        throw MaintenanceError("The product data directory could not be removed.")
+        throw MaintenanceError(.dataDirectoryNotRemoved)
       }
     }
     try SafeRemoval.remove(URL(fileURLWithPath: MaintenanceContract.daemonPath))

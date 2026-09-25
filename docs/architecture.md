@@ -68,9 +68,13 @@ Newer multi-policy configurations and logs are preserved by normal package updat
 
 The global log and each policy log retain a current file up to 10 MiB and one
 previous file. Each record can include the requesting program, target path,
-decision, signing facts and observed process history. File contents, command
-arguments and environment variables are not collected. Deleting a policy removes
-its separate policy log; the global log keeps its own retention cycle.
+decision, signing facts and observed process history, and each record notes the
+macOS build. Records of process starts, forks and exits also carry the raw audit
+token of each process involved: eight numbers holding its audit user ID, its
+effective and real user and group IDs, its process ID, its audit session ID and
+its process ID version. File contents, command arguments and environment
+variables are not collected. Deleting a policy removes its separate policy log;
+the global log keeps its own retention cycle.
 
 The in-memory history has a 128 MiB estimated-data limit. When space is needed,
 old records no longer needed by observed live executions are reclaimed in batches,
@@ -106,3 +110,11 @@ verifies its state, unregisters the current user's login item and then authorize
 file cleanup. If macOS requires a restart, the app remains available to finish
 removal afterward. The maintenance service never takes arbitrary deletion paths
 from policy rules or clients.
+
+Each privileged operation (activating the extension, deactivating it and
+uninstalling) has its own entry in the macOS authorization database. Every entry
+requires a fresh, non-shared administrator authentication that is never cached.
+The installer registers the entries as root after each installation, so their
+rules and the prompt text macOS shows in each app language match the installed
+app. The app and the command-line tool add an entry only when it is missing and
+refuse one whose rule was changed. Uninstall removes the entries.

@@ -6,9 +6,45 @@ import PasuFSHostCore
 import PasuFSMaintenanceCore
 
 enum SidebarSelection: Hashable {
-  case protection
-  case auditLog
+  case overview
   case policy(UUID)
+}
+
+enum SettingsTab: Hashable {
+  case general
+  case extensionStatus
+  case diagnostics
+}
+
+/// Opens the Add Program sheet for a policy, optionally with an identity already chosen.
+struct AddProgramRequest: Identifiable, Equatable {
+  let id = UUID()
+  let policyID: UUID
+  var preselected: AuditRuleCandidate?
+}
+
+struct AttentionItem: Identifiable, Equatable {
+  enum Action: Equatable {
+    case diagnostics
+    case extensionSettings
+    case generalSettings
+    case continueUninstall
+    case loginItems
+  }
+
+  let id: String
+  let text: String
+  var detail: String?
+  var action: Action?
+}
+
+/// A request Pasu FS denied, with the policy whose log recorded it.
+struct RecentDenial: Identifiable {
+  let policyID: UUID
+  let policyName: String
+  let record: AuditEventRecord
+
+  var id: String { record.id }
 }
 
 struct AuditRuleCandidate: Identifiable, Equatable {
@@ -20,37 +56,6 @@ struct AuditRuleCandidate: Identifiable, Equatable {
   let executablePath: String?
   let lastSeen: Date
   let observationCount: Int
-  let latestResult: String
-}
-
-struct SystemCompatibilityAuditCandidate: Identifiable, Equatable {
-  let policyIdentifier: UUID
-  let policyName: String
-  let policyMode: PolicyMode
-  let signingIdentifier: String
-  let operatingSystemBuild: String
-  let displayName: String
-  let executablePath: String?
-  let observationCount: Int
-  let firstSeen: Date
-  let lastSeen: Date
-  let requestedFlagValues: [UInt32]
-  let requestedFlagUnion: UInt32
-  let codeSigningFlagValues: [UInt32]
-  let targetPathSamples: [String]
-  let uniqueTargetPathCount: Int
-  let incompleteObservationCount: Int
-
-  var id: String {
-    "\(policyIdentifier.uuidString):\(operatingSystemBuild):\(signingIdentifier)"
-  }
-
-  var hasCompleteEvidence: Bool {
-    incompleteObservationCount == 0
-      && !requestedFlagValues.isEmpty
-      && !codeSigningFlagValues.isEmpty
-      && uniqueTargetPathCount > 0
-  }
 }
 
 struct SystemCompatibilityProfileItem: Identifiable, Equatable {
@@ -70,10 +75,14 @@ private struct SystemCompatibilitySettingsCandidate {
 @MainActor
 final class AppModel {
   var health = HealthState(protection: .starting)
-  var auditBatch = AuditLogBatch(records: [])
-  var auditFilterText = ""
   private(set) var policyLogs: [PolicyAuditLogKey: PolicyLogState] = [:]
-  var selectedSection: SidebarSelection = .protection
+  var selectedSection: SidebarSelection = .overview
+  var settingsTab: SettingsTab = .general
+  /// A new policy whose folder field takes keyboard focus when its screen appears.
+  var pendingFolderEntryPolicyID: UUID?
+  var addProgramRequest: AddProgramRequest?
+  /// A policy whose screen opens on its Log tab the next time it appears.
+  var pendingPolicyLogPolicyID: UUID?
   var lastError: String?
   var operationMessage: String?
   var isBusy = false
@@ -113,6 +122,10 @@ final class AppModel {
   private var pollingTask: Task<Void, Never>?
   private var installationProperties: [ExtensionInstallationProperties] = []
   private var hasFetchedInstallationProperties = false
+  // Until the first status check finishes, the setup state is unknown. The main window then shows
+  // its regular screens, which report that the status is being checked, rather than the setup
+  // assistant.
+  private var hasCompletedStatusCheck = false
   private var installationPropertiesObservedAt: Date?
   private var installationPropertiesError: String?
   private var isRequestingActivation = false
@@ -145,7 +158,7 @@ final class AppModel {
         return try UninstallStateStore().read()
       }
     do { pendingUninstall = try self.readUninstallState() } catch {
-      uninstallStateError = String(describing: error)
+      uninstallStateError = UserFacingError.message(error)
     }
     self.activationController = activationController
     appProductVersion = ProductVersion(bundleURL: hostBundleURL)
@@ -176,113 +189,87 @@ final class AppModel {
 
   // MARK: - Health presentation
 
+  var status: StatusPresentation {
+    StatusPresentation(health: health)
+  }
+
   var menuBarSymbolName: String {
-    switch health.protection {
-    case .enforcingOpenEvents: "lock.shield.fill"
-    case .monitoringOpenEvents: "eye.fill"
-    case .waitingForApproval, .waitingForFullDiskAccess, .starting: "hourglass"
-    case .degraded: "exclamationmark.shield.fill"
-    case .idle, .notInstalled, .stopped, .uninstalling: "lock.shield"
-    }
+    status.menuBarSymbolName
   }
 
-  var healthTitle: String {
-    switch health.protection {
-    case .notInstalled: "Not installed"
-    case .waitingForApproval: "Waiting for system-extension approval"
-    case .uninstalling: "Uninstalling"
-    case .stopped: "Stopped"
-    case .starting: "Starting"
-    case .waitingForFullDiskAccess: "Waiting for Full Disk Access"
-    case .idle: "No policies configured"
-    case .enforcingOpenEvents: "Enforcing Protection policies"
-    case .monitoringOpenEvents: "Monitoring Audit policies"
-    case .degraded: "Degraded"
-    }
-  }
-
-  var healthDetail: String {
-    switch health.protection {
-    case .degraded(let reason): reason
-    case .enforcingOpenEvents:
-      "A supported open must pass every matching Protection policy."
-    case .monitoringOpenEvents:
-      "Audit policies record hypothetical results but never deny a kernel request."
-    case .idle:
-      "No path is currently protected or audited."
-    case .waitingForFullDiskAccess:
-      "Grant Full Disk Access to the Pasu FS Endpoint Security extension in System Settings."
-    case .notInstalled:
-      "Activate the Endpoint Security system extension to begin setup."
-    case .stopped:
-      "The extension is installed but not active."
-    case .waitingForApproval:
-      "Approve the extension in System Settings."
-    case .uninstalling:
-      "Removal may require a restart before enforcement stops."
-    case .starting:
-      "Waiting for authenticated runtime readiness."
-    }
-  }
-
-  var healthSubtitle: String {
-    var parts: [String] = []
+  var activeRevisionFromHealth: UInt64? {
     switch health.protection {
     case .idle(let revision), .enforcingOpenEvents(let revision),
       .monitoringOpenEvents(let revision):
-      parts.append("Policy-set revision \(revision)")
+      revision
     default:
-      break
+      nil
     }
-    if health.protectionPolicyCount > 0 || health.auditPolicyCount > 0 {
-      parts.append(
-        "\(health.protectionPolicyCount) Protection · \(health.auditPolicyCount) Audit"
-      )
-    }
-    switch health.runtimeEvidenceSource {
-    case .authenticatedXPC: parts.append("Authenticated XPC")
-    case .diagnosticFile: parts.append("Diagnostic file only")
-    case nil: break
-    }
-    if let age = evidenceAgeDescription {
-      parts.append(age)
-    }
-    return parts.isEmpty ? healthDetail : parts.joined(separator: " · ")
   }
 
+  /// How old the latest runtime evidence is, formatted for the current language.
   var evidenceAgeDescription: String? {
     guard let latestEvidence else { return nil }
-    let age = max(0, Date().timeIntervalSince(latestEvidence.receivedAt))
-    return "updated \(Int(age.rounded())) s ago"
+    let receivedAt = min(latestEvidence.receivedAt, Date())
+    return receivedAt.formatted(.relative(presentation: .named, unitsStyle: .abbreviated))
+  }
+
+  var evidenceIsStale: Bool {
+    guard let latestEvidence else { return false }
+    return Date().timeIntervalSince(latestEvidence.receivedAt)
+      > HealthStateReducer.runtimeFreshnessInterval
+  }
+
+  /// One line naming the source of the status and its age.
+  var evidenceSummary: String {
+    let age = evidenceAgeDescription ?? ""
+    switch health.runtimeEvidenceSource {
+    case .authenticatedXPC:
+      if evidenceIsStale {
+        return String(localized: "Last authenticated check · \(age)")
+      }
+      return String(localized: "Verified over an authenticated connection · \(age)")
+    case .diagnosticFile:
+      return String(localized: "Diagnostic file only · not authenticated")
+    case nil:
+      return String(localized: "No runtime evidence")
+    }
   }
 
   var coveredEventsDescription: String {
     let events = health.coveredAuthorizationEvents
-    return events.isEmpty ? "None reported yet" : events.joined(separator: ", ")
+    return events.isEmpty
+      ? String(localized: "None reported yet") : events.joined(separator: ", ")
   }
 
   var runtimeEvidenceDescription: String {
     switch health.runtimeEvidenceSource {
     case .authenticatedXPC:
-      "Authenticated XPC (\(Int(HealthStateReducer.runtimeFreshnessInterval)) s freshness window)"
+      String(
+        localized:
+          "Authenticated connection (within \(Int(HealthStateReducer.runtimeFreshnessInterval)) seconds)"
+      )
     case .diagnosticFile:
-      "Diagnostic status file only — cannot establish protection"
+      String(localized: "Diagnostic file only (cannot confirm protection)")
     case nil:
-      "No runtime evidence"
+      String(localized: "No runtime evidence")
     }
   }
 
-  var installationSummary: String {
-    guard let installation else { return "Not installed" }
-    let state =
-      installation.isUninstalling
-      ? "Uninstalling"
-      : installation.isAwaitingUserApproval
-        ? "Awaiting approval"
-        : installation.isEnabled ? "Enabled" : "Not enabled"
-    return "\(state) · \(installation.bundleIdentifier)"
+  var installationStateDescription: String {
+    guard let installation else { return String(localized: "Not installed") }
+    if installation.isUninstalling { return String(localized: "Uninstalling") }
+    if installation.isAwaitingUserApproval { return String(localized: "Waiting for approval") }
+    return installation.isEnabled
+      ? String(localized: "Enabled") : String(localized: "Not enabled")
   }
 
+  var installedExtensionIdentifier: String? {
+    installation?.bundleIdentifier
+  }
+
+  /// Pass the current time as `now`. A `TimelineView` entry date can be earlier than the latest
+  /// query, and a query from the future reads as out of date.
   func extensionVersionOverview(now: Date) -> ExtensionVersionOverview {
     ExtensionVersionOverview(
       app: appProductVersion, included: includedExtensionVersion,
@@ -301,10 +288,11 @@ final class AppModel {
   }
 
   var menuBarPolicySummary: String {
-    guard let activePolicySet else { return "No accepted policy set" }
+    guard let activePolicySet else { return String(localized: "No saved policies") }
     let protectionCount = activePolicySet.policies.lazy.filter { $0.mode == .protection }.count
     let auditCount = activePolicySet.policies.count - protectionCount
-    return "\(protectionCount) Protection · \(auditCount) Audit"
+    return String(
+      localized: "Protection policies: \(protectionCount) · Audit policies: \(auditCount)")
   }
 
   var isOpenAtLoginRegistered: Bool {
@@ -326,10 +314,79 @@ final class AppModel {
     !dirtyPolicyIDs.isEmpty
   }
 
+  /// Problems listed under "Needs attention" on the Overview. The status summary is not repeated.
+  func attentionItems(now: Date = Date()) -> [AttentionItem] {
+    var items: [AttentionItem] = []
+    if let warning = health.policyWarning {
+      items.append(
+        AttentionItem(
+          id: "policyWarning",
+          text: String(localized: "The extension reported a policy warning."),
+          detail: RuntimeText.localized(warning)))
+    }
+    if let warning = policySynchronizationWarning {
+      items.append(AttentionItem(id: "policySync", text: warning))
+    }
+    if let warning = systemCompatibilitySynchronizationWarning {
+      items.append(AttentionItem(id: "compatibility", text: RuntimeText.localized(warning)))
+    }
+    let dropped = droppedAuditEventCount
+    let storageProblems =
+      (auditDeliveryMetrics?.storageFailures ?? 0) + (auditDeliveryMetrics?.admissionDrops ?? 0)
+    if dropped > 0 || storageProblems > 0 {
+      let text =
+        dropped > 0 && storageProblems == 0
+        ? String(localized: "\(dropped) log records couldn’t be saved during this run.")
+        : String(localized: "Some log records couldn’t be saved during this run.")
+      items.append(
+        AttentionItem(
+          id: "auditLoss", text: text, action: .diagnostics))
+    }
+    if let responses = authorizationMetrics, responses.failures + responses.deadlineExceeded > 0 {
+      items.append(
+        AttentionItem(
+          id: "authorization",
+          text: String(
+            localized: "Some authorization responses failed or finished after the deadline."),
+          action: .diagnostics))
+    }
+    switch health.protection {
+    case .idle, .enforcingOpenEvents, .monitoringOpenEvents, .degraded:
+      let overview = extensionVersionOverview(now: now)
+      if overview.tone == .attention {
+        items.append(
+          AttentionItem(
+            id: "versions", text: overview.comparison, detail: overview.notices.first?.text,
+            action: .extensionSettings))
+      }
+    default:
+      break
+    }
+    if pendingUninstall != nil || uninstallStateError != nil {
+      items.append(
+        AttentionItem(
+          id: "uninstall",
+          text: String(
+            localized: "An uninstall is in progress. Automatic extension updates are paused."),
+          action: .continueUninstall))
+    }
+    if loginItemState == .requiresApproval {
+      items.append(
+        AttentionItem(
+          id: "loginItem",
+          text: String(localized: "Open at Login needs approval in System Settings."),
+          action: .loginItems))
+    }
+    if let error = loginItemError {
+      items.append(AttentionItem(id: "loginItemError", text: error, action: .generalSettings))
+    }
+    return items
+  }
+
   // MARK: - Onboarding
 
   var showsOnboarding: Bool {
-    guard !hasChosenFirstPolicySetup else { return false }
+    guard hasCompletedStatusCheck, !hasChosenFirstPolicySetup else { return false }
     return SetupProgress.showsOnboarding(
       health,
       hasEverSeenActivePolicy: hasEverSeenActivePolicySet
@@ -338,11 +395,6 @@ final class AppModel {
 
   var setupStepStates: SetupStepStates {
     SetupProgress.stepStates(health)
-  }
-
-  func beginFirstPolicySetup() {
-    hasChosenFirstPolicySetup = true
-    createNewPolicy()
   }
 
   func openExtensionApprovalSettings() {
@@ -372,7 +424,7 @@ final class AppModel {
     {
       return
     }
-    lastError = "System Settings could not be opened."
+    lastError = String(localized: "System Settings could not be opened.")
   }
 
   // MARK: - Lifecycle
@@ -396,6 +448,7 @@ final class AppModel {
   }
 
   func refreshHealth() async {
+    defer { hasCompletedStatusCheck = true }
     refreshLoginItemState()
     let properties: [ExtensionInstallationProperties]
     do {
@@ -403,7 +456,9 @@ final class AppModel {
     } catch {
       health = HealthState(
         protection: .degraded(
-          reason: "System-extension properties are unavailable: \(error)"
+          reason: String(
+            localized:
+              "macOS did not report the system extension state: \(UserFacingError.message(error))")
         )
       )
       return
@@ -427,8 +482,9 @@ final class AppModel {
     } catch let error as ExtensionControlClientError {
       if case .configurationProtocolMismatch = error {
         latestEvidence = nil
-        health = HealthState(protection: .degraded(reason: error.description))
-        policySynchronizationWarning = error.description
+        let message = UserFacingError.extensionClient(error)
+        health = HealthState(protection: .degraded(reason: message))
+        policySynchronizationWarning = message
         return
       }
       do {
@@ -497,7 +553,8 @@ final class AppModel {
       refreshLoginItemState()
     } catch {
       refreshLoginItemState()
-      loginItemError = "Open at Login could not be changed: \(error.localizedDescription)"
+      loginItemError = String(
+        localized: "Open at Login could not be changed: \(error.localizedDescription)")
     }
   }
 
@@ -507,7 +564,7 @@ final class AppModel {
 
   func stopProtectionForQuit() async -> StopProtectionQuitOutcome {
     guard !isBusy, !isStoppingProtectionForQuit else {
-      return .failed("Another Pasu FS operation is already in progress.")
+      return .failed(String(localized: "Another Pasu FS operation is already in progress."))
     }
     isStoppingProtectionForQuit = true
     defer { isStoppingProtectionForQuit = false }
@@ -553,19 +610,25 @@ final class AppModel {
       if let pending = pendingUninstall, pending.phase == .awaitingRestart {
         guard let previousBoot = pending.bootSession, let currentBoot = BootSession.identifier()
         else {
-          throw MaintenanceError(
-            "Pasu FS could not verify that the Mac restarted. No files were removed.")
+          throw UninstallFlowError(
+            String(
+              localized: "Pasu FS could not verify that the Mac restarted. No files were removed."
+            ))
         }
         guard previousBoot != currentBoot else {
-          throw MaintenanceError(
-            "Restart this Mac, then open Pasu FS again to finish uninstalling. No application or policy files have been removed."
-          )
+          throw UninstallFlowError(
+            String(
+              localized:
+                "Restart this Mac, then open Pasu FS again to finish uninstalling. No application or policy files have been removed."
+            ))
         }
       }
       ticket = try await uninstallAuthorizer.prepare(
         using: maintenanceClient, removeData: removeData)
-      guard let ticket else { throw MaintenanceError("No uninstall approval was returned.") }
-      operationMessage = "Checking whether protection can be removed…"
+      guard let ticket else {
+        throw UninstallFlowError(String(localized: "No uninstall approval was returned."))
+      }
+      operationMessage = String(localized: "Checking whether protection can be removed…")
       let stopped = await verifyExtensionStopped(requireRemovalComplete: true)
       var outcome: LifecycleRequestOutcome
       if stopped {
@@ -581,23 +644,27 @@ final class AppModel {
           // macOS can complete the request while retaining an uninstalling entry
           // until reboot. Persist the restart barrier instead of treating it as removal.
           guard try await extensionRemovalAwaitsRestart() else {
-            throw MaintenanceError(
-              "Pasu FS could not verify that system-extension removal completed. No application files were removed."
-            )
+            throw UninstallFlowError(
+              String(
+                localized:
+                  "Pasu FS could not verify that the system extension was removed. No application files were removed."
+              ))
           }
           outcome = .requiresRestart
         }
       }
       switch outcome {
-      case .failed(let description): throw MaintenanceError(description)
+      case .failed(let description): throw UninstallFlowError(description)
       case .requiresRestart:
         extensionRequestAccepted = true
         // Persist the reboot barrier even if login-item unregistration then fails.
         try await maintenanceClient.commit(ticket: ticket, action: .awaitRestart)
         try unregisterLoginItemForUninstall()
         pendingUninstall = try readUninstallState()
-        operationMessage =
-          "Restart this Mac, then open Pasu FS to finish uninstalling. The app and its data remain in place."
+        operationMessage = String(
+          localized:
+            "Restart this Mac, then open Pasu FS to finish uninstalling. The app and its data remain in place."
+        )
         return false
       case .completed:
         extensionRequestAccepted = true
@@ -605,8 +672,8 @@ final class AppModel {
       try unregisterLoginItemForUninstall()
       try await maintenanceClient.commit(ticket: ticket, action: .removeFiles)
       isFinalizingUninstall = true
-      operationMessage =
-        "The maintenance service accepted the final cleanup. Pasu FS will now quit."
+      operationMessage = String(
+        localized: "The maintenance service accepted the final cleanup. Pasu FS will now quit.")
       return true
     } catch {
       if let ticket, !extensionRequestAccepted {
@@ -614,14 +681,20 @@ final class AppModel {
       }
       await maintenanceClient.invalidate()
       do { pendingUninstall = try readUninstallState() } catch {
-        uninstallStateError = String(describing: error)
+        uninstallStateError = UserFacingError.message(error)
       }
-      lastError =
-        (error as NSError).userInfo[NSLocalizedDescriptionKey] as? String
-        ?? String(describing: error)
+      lastError = UserFacingError.message(error)
       operationMessage = nil
       return false
     }
+  }
+
+  /// The failure recorded by the maintenance service, in the user's language when its code is
+  /// known. Older state files carry only the English text.
+  var pendingUninstallFailureMessage: String? {
+    guard let pending = pendingUninstall, let failure = pending.failure else { return nil }
+    guard let code = pending.failureCode else { return failure }
+    return UserFacingError.maintenance(code, detail: pending.failureDetail)
   }
 
   private func extensionRemovalAwaitsRestart() async throws -> Bool {
@@ -649,27 +722,27 @@ final class AppModel {
       // can fail with EPERM / "record not found" on a fresh installation.
       return
     case .enabled, .requiresApproval:
-      operationMessage = "Removing the login registration…"
+      operationMessage = String(localized: "Removing the login registration…")
       do {
         try loginItemController.unregister()
       } catch {
-        throw MaintenanceError(
-          "Could not remove the login registration: \(error.localizedDescription)")
+        throw UninstallFlowError(
+          String(
+            localized: "Could not remove the login registration: \(error.localizedDescription)"
+          ))
       }
       refreshLoginItemState()
       guard loginItemState == .notRegistered || loginItemState == .notFound else {
-        throw MaintenanceError(
-          "macOS still reports a login registration. No application files were removed.")
+        throw UninstallFlowError(
+          String(
+            localized:
+              "macOS still reports a login registration. No application files were removed."))
       }
     }
   }
 
   var activeRevision: UInt64? {
     acceptedRevision > 0 ? acceptedRevision : nil
-  }
-
-  var nextRevisionDescription: String {
-    "policy-set revision \(acceptedRevision + 1)"
   }
 
   var sidebarPolicies: [DirectoryPolicyDraft] {
@@ -705,28 +778,82 @@ final class AppModel {
 
   func draftValidationMessage(for id: UUID) -> String? {
     guard acceptedRevision < UInt64.max else {
-      return "The policy-set revision counter is exhausted."
+      return UserFacingError.message(AppModelError.policyRevisionExhausted)
+    }
+    if let path = policyDrafts[id]?.protectedRootPath,
+      let issue = ProtectedFolderCheck.issue(for: path)
+    {
+      return issue.userFacingMessage
     }
     do {
       _ = try candidateDocument(replacing: id, with: policyDrafts[id])
       return nil
     } catch {
-      return String(describing: error)
+      return UserFacingError.message(error)
     }
   }
 
+  var canCreatePolicy: Bool {
+    policyOrder.count < PolicySetDocument.maximumPolicyCount
+  }
+
+  /// Adds an unsaved Audit whitelist without a folder and opens it with its folder field
+  /// focused. Audit blocks nothing, so the log can show which programs to allow before the
+  /// policy is switched to Protection.
   func createNewPolicy() {
-    guard policyOrder.count < PolicySetDocument.maximumPolicyCount else {
-      lastError =
-        "A policy set can contain at most \(PolicySetDocument.maximumPolicyCount) policies."
+    let countBefore = policyOrder.count
+    createPolicy(
+      name: nextAvailablePolicyName(), protectedRootPath: "", mode: .audit, policyType: .whitelist)
+    guard policyOrder.count > countBefore, case .policy(let id) = selectedSection else { return }
+    pendingFolderEntryPolicyID = id
+  }
+
+  /// Adds an unsaved draft and opens it. Nothing is applied until the policy is saved.
+  func createPolicy(
+    name: String,
+    protectedRootPath: String,
+    mode: PolicyMode,
+    policyType: PolicyType
+  ) {
+    guard canCreatePolicy else {
+      lastError = UserFacingError.message(
+        PolicyValidationError.tooManyPolicies(policyOrder.count + 1))
       return
     }
-    let draft = DirectoryPolicyDraft(name: nextAvailablePolicyName())
+    let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    let draft = DirectoryPolicyDraft(
+      name: trimmedName.isEmpty ? nextAvailablePolicyName() : trimmedName,
+      mode: mode,
+      policyType: policyType,
+      protectedRootPath: protectedRootPath
+    )
     policyDrafts[draft.id] = draft
     policyOrder.append(draft.id)
     selectedSection = .policy(draft.id)
     hasChosenFirstPolicySetup = true
     lastError = nil
+    operationMessage = nil
+  }
+
+  /// The name of another policy that already uses this folder in the same mode.
+  func conflictingPolicyName(mode: PolicyMode, path: String, excluding id: UUID? = nil) -> String? {
+    guard !path.isEmpty else { return nil }
+    let key = PolicySetDocument.canonicalPathComparisonKey(path)
+    return policyOrder.lazy
+      .compactMap { self.policyDrafts[$0] }
+      .first {
+        $0.id != id && $0.mode == mode
+          && !$0.protectedRootPath.isEmpty
+          && PolicySetDocument.canonicalPathComparisonKey($0.protectedRootPath) == key
+      }?
+      .name
+  }
+
+  private static func policyNameKey(_ name: String) -> String {
+    name.trimmingCharacters(in: .whitespacesAndNewlines).folding(
+      options: [.caseInsensitive, .diacriticInsensitive],
+      locale: Locale(identifier: "en_US_POSIX")
+    )
   }
 
   func updatePolicyDraft(
@@ -753,12 +880,20 @@ final class AppModel {
         throw AppModelError.policySetReceiptMismatch
       }
       installActivePolicySet(document, markingClean: id)
-      operationMessage = "Policy-set revision \(receipt.acceptedRevision) was accepted."
+      operationMessage = String(
+        localized: "Saved. The policies were applied as revision \(receipt.acceptedRevision).")
       await refreshHealth()
     } catch {
-      lastError = String(describing: error)
+      lastError = UserFacingError.message(error)
       await refreshHealth()
     }
+  }
+
+  /// Switches an Audit policy to Protection and saves it in one step.
+  func switchToProtection(policyID: UUID) async {
+    guard policyDrafts[policyID] != nil else { return }
+    updatePolicyDraft(id: policyID) { $0.mode = .protection }
+    await savePolicy(id: policyID)
   }
 
   func revertPolicy(id: UUID) {
@@ -801,10 +936,13 @@ final class AppModel {
       policyOrder.removeAll { $0 == id }
       installActivePolicySet(document, markingClean: id)
       selectAfterRemovingPolicy(id)
-      operationMessage = "Policy deleted in policy-set revision \(receipt.acceptedRevision)."
+      operationMessage = String(
+        localized:
+          "The policy was deleted. The remaining policies were applied as revision \(receipt.acceptedRevision)."
+      )
       await refreshHealth()
     } catch {
-      lastError = String(describing: error)
+      lastError = UserFacingError.message(error)
       await refreshHealth()
     }
   }
@@ -821,7 +959,7 @@ final class AppModel {
     if let next = policyOrder.first {
       selectedSection = .policy(next)
     } else {
-      selectedSection = .protection
+      selectedSection = .overview
     }
   }
 
@@ -856,58 +994,70 @@ final class AppModel {
   }
 
   private func nextAvailablePolicyName() -> String {
-    let used = Set(
-      policyDrafts.values.map {
-        $0.name.folding(
-          options: [.caseInsensitive, .diacriticInsensitive],
-          locale: Locale(identifier: "en_US_POSIX")
-        )
-      })
+    let used = Set(policyDrafts.values.map { Self.policyNameKey($0.name) })
     var number = 1
-    while used.contains("policy \(number)") {
+    while used.contains(Self.policyNameKey(Self.numberedPolicyName(number))) {
       number += 1
     }
-    return "Policy \(number)"
+    return Self.numberedPolicyName(number)
+  }
+
+  private static func numberedPolicyName(_ number: Int) -> String {
+    String(localized: "Policy \(number)")
   }
 
   // MARK: - Rules
 
-  func addTeamSignedRule(policyID: UUID) {
-    updatePolicyDraft(id: policyID) { $0.addRule(kind: .teamSigned) }
-  }
-
-  func addPlatformRule(policyID: UUID) {
-    updatePolicyDraft(id: policyID) { $0.addRule(kind: .platformBinary) }
-  }
-
-  func addRule(policyID: UUID, fromApplicationAt url: URL) {
-    do {
-      let info = try SigningInfoReader.read(fromApplicationAt: url)
-      let candidate = AuditRuleCandidate(
-        id: identityKey(
-          kind: info.isPlatformBinary ? .platformBinary : .teamSigned,
-          teamIdentifier: info.teamIdentifier,
-          signingIdentifier: info.signingIdentifier
-        ),
-        kind: info.isPlatformBinary ? .platformBinary : .teamSigned,
-        teamIdentifier: info.teamIdentifier,
-        signingIdentifier: info.signingIdentifier,
-        displayName: FileManager.default.displayName(atPath: url.path),
-        executablePath: url.path,
-        lastSeen: Date(),
-        observationCount: 1,
-        latestResult: "selected application"
-      )
-      try addRule(policyID: policyID, from: candidate)
-    } catch {
-      lastError = String(describing: error)
+  /// Reads an application's code signature and returns the identity a rule would store.
+  func applicationCandidate(at url: URL) throws -> AuditRuleCandidate {
+    let info = try SigningInfoReader.read(fromApplicationAt: url)
+    if !info.isPlatformBinary, info.teamIdentifier?.isEmpty ?? true {
+      throw AppModelError.applicationHasNoTeamIdentifier
     }
+    let kind: PolicyRuleKind = info.isPlatformBinary ? .platformBinary : .teamSigned
+    return AuditRuleCandidate(
+      id: identityKey(
+        kind: kind, teamIdentifier: info.teamIdentifier,
+        signingIdentifier: info.signingIdentifier),
+      kind: kind,
+      teamIdentifier: info.isPlatformBinary ? nil : info.teamIdentifier?.uppercased(),
+      signingIdentifier: info.signingIdentifier,
+      displayName: FileManager.default.displayName(atPath: url.path),
+      executablePath: url.path,
+      lastSeen: Date(),
+      observationCount: 0
+    )
   }
 
-  func addRule(policyID: UUID, from candidate: AuditRuleCandidate) throws {
+  /// A candidate for a manually entered identity. Validation matches the saved policy rules.
+  func manualCandidate(
+    kind: PolicyRuleKind, teamIdentifier: String, signingIdentifier: String
+  ) -> AuditRuleCandidate {
+    let team = teamIdentifier.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+    let signing = signingIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
+    return AuditRuleCandidate(
+      id: identityKey(
+        kind: kind, teamIdentifier: kind == .teamSigned ? team : nil, signingIdentifier: signing),
+      kind: kind,
+      teamIdentifier: kind == .teamSigned ? team : nil,
+      signingIdentifier: signing,
+      displayName: signing,
+      executablePath: nil,
+      lastSeen: Date(),
+      observationCount: 0
+    )
+  }
+
+  func addRule(
+    policyID: UUID, from candidate: AuditRuleCandidate, allowsDescendants: Bool = false
+  ) throws {
+    guard !candidate.signingIdentifier.isEmpty else {
+      throw AppModelError.signingIdentifierRequired
+    }
     guard !policyContainsIdentity(policyID: policyID, candidate: candidate) else {
       throw AppModelError.duplicateRuleIdentity
     }
+    let ruleID = "rule.\(UUID().uuidString.lowercased())"
     let rule: PolicyRule
     switch candidate.kind {
     case .teamSigned:
@@ -915,18 +1065,18 @@ final class AppModel {
         throw AppModelError.auditIdentityIncomplete
       }
       rule = .teamSigned(
-        id: "rule.\(UUID().uuidString.lowercased())",
+        id: ruleID,
         teamIdentifier: teamIdentifier.uppercased(),
         signingIdentifier: candidate.signingIdentifier,
         isEnabled: true,
-        allowsDescendants: false
+        allowsDescendants: allowsDescendants
       )
     case .platformBinary:
       rule = .platformBinary(
-        id: "rule.\(UUID().uuidString.lowercased())",
+        id: ruleID,
         signingIdentifier: candidate.signingIdentifier,
         isEnabled: true,
-        allowsDescendants: false
+        allowsDescendants: allowsDescendants
       )
     }
     updatePolicyDraft(id: policyID) { $0.rules.append(rule) }
@@ -960,11 +1110,34 @@ final class AppModel {
 
   func ruleDisplayName(for rule: PolicyRule) -> String {
     let identifier = rule.signingIdentifier
-    guard !identifier.isEmpty else { return "New rule" }
+    guard !identifier.isEmpty else { return String(localized: "New program") }
     if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: identifier) {
       return FileManager.default.displayName(atPath: url.path)
     }
+    if let path = observedExecutablePath(for: rule) {
+      return (path as NSString).lastPathComponent
+    }
     return identifier
+  }
+
+  /// The executable most recently seen with this rule's identity in the loaded records.
+  private func observedExecutablePath(for rule: PolicyRule) -> String? {
+    let batches = policyLogs.values.map(\.batch)
+    for batch in batches {
+      let match = batch.records.last { record in
+        guard record.signingIdentifier == rule.signingIdentifier else { return false }
+        switch rule.kind {
+        case .platformBinary:
+          return record.isPlatformBinary == true
+        case .teamSigned:
+          return record.teamIdentifier?.uppercased() == rule.teamIdentifier?.uppercased()
+        }
+      }
+      if let path = match?.executablePath, !path.isEmpty {
+        return path
+      }
+    }
+    return nil
   }
 
   func policyContainsIdentity(policyID: UUID, candidate: AuditRuleCandidate) -> Bool {
@@ -1041,14 +1214,16 @@ final class AppModel {
       systemCompatibilitySynchronizationWarning = nil
       let result =
         enabled
-        ? "System compatibility profile enabled."
-        : "System compatibility profile disabled."
+        ? String(localized: "The system compatibility profile was turned on.")
+        : String(localized: "The system compatibility profile was turned off.")
+      let removed = candidate.removedObsoleteItemCount
       operationMessage =
-        candidate.removedObsoleteItemCount == 0
+        removed == 0
         ? result
-        : "\(result) Removed \(candidate.removedObsoleteItemCount) obsolete compatibility setting(s)."
+        : result + " "
+          + String(localized: "Removed \(removed) compatibility settings that no longer apply.")
     } catch {
-      lastError = String(describing: error)
+      lastError = UserFacingError.message(error)
       await synchronizeSystemCompatibilityState()
     }
   }
@@ -1134,37 +1309,10 @@ final class AppModel {
     )
   }
 
-  // MARK: - Audit log
+  // MARK: - Policy logs
 
-  var filteredAuditRecords: [AuditEventRecord] {
-    let records = Array(auditBatch.records.reversed())
-    let needle = auditFilterText.trimmingCharacters(in: .whitespaces)
-    guard !needle.isEmpty else { return records }
-    return records.filter { record in
-      var values: [String?] = [
-        record.targetPath,
-        record.executablePath,
-        record.signingIdentifier,
-        record.teamIdentifier,
-        record.policyDecision,
-        record.kernelResponse,
-        record.eventType,
-      ]
-      values.append(
-        contentsOf: (record.policyEvaluations ?? []).flatMap {
-          [
-            $0.policyName, $0.policyType.rawValue, $0.decision.rawValue,
-            $0.ruleIdentifier, $0.systemCompatibilityProfileIdentifier,
-          ]
-        })
-      values.append(contentsOf: record.lineageSearchValues.map(Optional.some))
-      return values.compactMap { $0 }.contains {
-        $0.localizedCaseInsensitiveContains(needle)
-      }
-    }
-  }
-
-  var auditRuleCandidates: [AuditRuleCandidate] {
+  /// Signed programs that opened files in this policy's folder, from its loaded log.
+  func ruleCandidates(policyID: UUID) -> [AuditRuleCandidate] {
     struct Accumulator {
       var kind: PolicyRuleKind
       var teamIdentifier: String?
@@ -1172,12 +1320,13 @@ final class AppModel {
       var executablePath: String?
       var lastSeen: Date
       var observationCount: Int
-      var latestResult: String
     }
 
     var grouped: [String: Accumulator] = [:]
-    for record in auditBatch.records {
-      guard let signingIdentifier = record.signingIdentifier, !signingIdentifier.isEmpty else {
+    for record in policyLogState(policyID: policyID)?.batch.records ?? [] {
+      guard record.eventType == "AUTH_OPEN",
+        let signingIdentifier = record.signingIdentifier, !signingIdentifier.isEmpty
+      else {
         continue
       }
       let kind: PolicyRuleKind
@@ -1204,7 +1353,6 @@ final class AppModel {
         if record.timestamp >= existing.lastSeen {
           existing.lastSeen = record.timestamp
           existing.executablePath = record.executablePath
-          existing.latestResult = record.kernelResponse
         }
         grouped[key] = existing
       } else {
@@ -1214,8 +1362,7 @@ final class AppModel {
           signingIdentifier: signingIdentifier,
           executablePath: record.executablePath,
           lastSeen: record.timestamp,
-          observationCount: 1,
-          latestResult: record.kernelResponse
+          observationCount: 1
         )
       }
     }
@@ -1232,142 +1379,86 @@ final class AppModel {
         ),
         executablePath: value.executablePath,
         lastSeen: value.lastSeen,
-        observationCount: value.observationCount,
-        latestResult: value.latestResult
+        observationCount: value.observationCount
       )
     }
     .sorted { $0.lastSeen > $1.lastSeen }
   }
 
-  func systemCompatibilityAuditCandidates(
-    policyID: UUID? = nil
-  ) -> [SystemCompatibilityAuditCandidate] {
-    guard let activePolicySet else { return [] }
-    let activePoliciesByID = Dictionary(
-      uniqueKeysWithValues: activePolicySet.policies.map { ($0.id, $0) }
-    )
-    struct CandidateKey: Hashable {
-      var policyIdentifier: UUID
-      var signingIdentifier: String
-      var operatingSystemBuild: String
+  /// Reloads the log of every saved policy.
+  func refreshPolicyAuditLogs() async {
+    for policy in activePolicySet?.policies ?? [] {
+      await refreshPolicyAuditLog(policyID: policy.id)
     }
-    struct Accumulator {
-      var policyName: String
-      var policyMode: PolicyMode
-      var executablePath: String?
-      var observationCount: Int
-      var firstSeen: Date
-      var lastSeen: Date
-      var requestedFlags: Set<UInt32>
-      var codeSigningFlags: Set<UInt32>
-      var targetPaths: Set<String>
-      var incompleteObservationCount: Int
-    }
-
-    var grouped: [CandidateKey: Accumulator] = [:]
-    for record in auditBatch.records {
-      guard record.eventType == "AUTH_OPEN",
-        record.policySetIdentifier == activePolicySet.setIdentifier,
-        record.policyRevision == activePolicySet.revision,
-        record.isPlatformBinary == true,
-        record.pathWasTruncated != true,
-        let signingIdentifier = record.signingIdentifier,
-        !signingIdentifier.isEmpty,
-        let operatingSystemBuild = record.operatingSystemBuild,
-        !operatingSystemBuild.isEmpty
-      else {
-        continue
-      }
-      for evaluation in record.policyEvaluations ?? [] {
-        guard let activePolicy = activePoliciesByID[evaluation.policyIdentifier],
-          activePolicy.policyType == .whitelist,
-          activePolicy.mode == evaluation.mode,
-          evaluation.policyType == .whitelist,
-          evaluation.match == .none,
-          evaluation.decision == .deny || evaluation.decision == .wouldDeny,
-          policyID == nil || evaluation.policyIdentifier == policyID
-        else {
-          continue
-        }
-        let key = CandidateKey(
-          policyIdentifier: evaluation.policyIdentifier,
-          signingIdentifier: signingIdentifier,
-          operatingSystemBuild: operatingSystemBuild
-        )
-        let requestedFlags = record.requestedFlags.map { UInt32(bitPattern: $0) }
-        let incomplete =
-          requestedFlags == nil || requestedFlags == 0
-            || record.codeSigningFlags == nil || record.targetPath == nil ? 1 : 0
-
-        if var existing = grouped[key] {
-          existing.observationCount += 1
-          existing.firstSeen = min(existing.firstSeen, record.timestamp)
-          if record.timestamp >= existing.lastSeen {
-            existing.lastSeen = record.timestamp
-            existing.executablePath = record.executablePath
-          }
-          if let requestedFlags, requestedFlags != 0 {
-            existing.requestedFlags.insert(requestedFlags)
-          }
-          if let codeSigningFlags = record.codeSigningFlags {
-            existing.codeSigningFlags.insert(codeSigningFlags)
-          }
-          if let targetPath = record.targetPath {
-            existing.targetPaths.insert(targetPath)
-          }
-          existing.incompleteObservationCount += incomplete
-          grouped[key] = existing
-        } else {
-          grouped[key] = Accumulator(
-            policyName: evaluation.policyName,
-            policyMode: evaluation.mode,
-            executablePath: record.executablePath,
-            observationCount: 1,
-            firstSeen: record.timestamp,
-            lastSeen: record.timestamp,
-            requestedFlags: requestedFlags.map { $0 == 0 ? [] : [$0] } ?? [],
-            codeSigningFlags: record.codeSigningFlags.map { [$0] } ?? [],
-            targetPaths: record.targetPath.map { [$0] } ?? [],
-            incompleteObservationCount: incomplete
-          )
-        }
-      }
-    }
-
-    return grouped.map { key, value in
-      let flagValues = value.requestedFlags.sorted()
-      return SystemCompatibilityAuditCandidate(
-        policyIdentifier: key.policyIdentifier,
-        policyName: value.policyName,
-        policyMode: value.policyMode,
-        signingIdentifier: key.signingIdentifier,
-        operatingSystemBuild: key.operatingSystemBuild,
-        displayName: displayName(
-          signingIdentifier: key.signingIdentifier,
-          executablePath: value.executablePath
-        ),
-        executablePath: value.executablePath,
-        observationCount: value.observationCount,
-        firstSeen: value.firstSeen,
-        lastSeen: value.lastSeen,
-        requestedFlagValues: flagValues,
-        requestedFlagUnion: flagValues.reduce(UInt32(0), |),
-        codeSigningFlagValues: value.codeSigningFlags.sorted(),
-        targetPathSamples: Array(value.targetPaths.sorted().prefix(5)),
-        uniqueTargetPathCount: value.targetPaths.count,
-        incompleteObservationCount: value.incompleteObservationCount
-      )
-    }
-    .sorted { $0.lastSeen > $1.lastSeen }
   }
 
-  func refreshAuditLog() async {
-    do {
-      auditBatch = try await controlClient.readAuditLog(maximumLineCount: 500)
-      lastError = nil
-    } catch {
-      lastError = String(describing: error)
+  /// Whether any saved policy's log has been loaded.
+  var hasLoadedPolicyLogs: Bool {
+    (activePolicySet?.policies ?? []).contains {
+      policyLogState(policyID: $0.id)?.hasLoaded == true
     }
+  }
+
+  /// Errors from loading saved policies' logs.
+  var policyLogErrors: [String] {
+    (activePolicySet?.policies ?? []).compactMap { policyLogState(policyID: $0.id)?.error }
+  }
+
+  /// The newest opens that Pasu FS actually denied among the loaded policy logs.
+  func recentDenials(limit: Int = 3) -> [RecentDenial] {
+    let denials = (activePolicySet?.policies ?? []).flatMap { policy in
+      (policyLogState(policyID: policy.id)?.batch.records ?? [])
+        .filter { $0.kernelResponse == "deny" }
+        .map { RecentDenial(policyID: policy.id, policyName: policy.name, record: $0) }
+    }
+    // An open that falls under several policies is recorded in each of their logs.
+    var seen = Set<String>()
+    let unique = denials.sorted { $0.record.timestamp > $1.record.timestamp }
+      .filter { seen.insert($0.record.id).inserted }
+    return Array(unique.prefix(limit))
+  }
+
+  /// Opens a policy's Log tab with one record selected in its details.
+  func showPolicyLogRecord(policyID: UUID, recordID: String) {
+    if let log = policyLogState(policyID: policyID) {
+      log.presentation = .events
+      log.filterText = ""
+      log.selectedEventIDs = [recordID]
+      log.wantsInspector = true
+    }
+    pendingPolicyLogPolicyID = policyID
+    selectedSection = .policy(policyID)
+  }
+
+  func policyProgramSummaries(policyID: UUID) -> [PolicyProgramSummary] {
+    guard let log = policyLogState(policyID: policyID) else { return [] }
+    return PolicyProgramSummarizer.summaries(
+      records: log.batch.records, policyID: policyID,
+      displayName: { signing, path in
+        self.displayName(signingIdentifier: signing, executablePath: path)
+      })
+  }
+
+  /// Loaded programs whose opens would be denied if this policy enforced its current draft.
+  func projectedDenials(policyID: UUID) -> [PolicyProgramSummary] {
+    guard let draft = policyDrafts[policyID] else { return [] }
+    return PolicyProgramSummarizer.projectedDenials(
+      summaries: policyProgramSummaries(policyID: policyID),
+      policyType: draft.policyType,
+      rules: draft.rules)
+  }
+
+  func draftContainsRule(policyID: UUID, summary: PolicyProgramSummary) -> PolicyRule? {
+    policyDrafts[policyID]?.rules.first { PolicyProgramSummarizer.ruleKey($0) == summary.id }
+  }
+
+  /// Whether the main window drops its minimum width: the selected policy's Log tab is on
+  /// screen and shows its inspector or is about to. See MainWindowLayout.
+  var relaxesMainWindowMinimumWidth: Bool {
+    guard case .policy(let id) = selectedSection, let log = policyLogState(policyID: id) else {
+      return false
+    }
+    return log.isOnScreen && log.wantsInspector
   }
 
   func policyLogState(policyID: UUID) -> PolicyLogState? {
@@ -1398,7 +1489,7 @@ final class AppModel {
       guard !Task.isCancelled, policyLogs[log.key] === log, log.requestID == requestID else {
         return
       }
-      log.error = String(describing: error)
+      log.error = UserFacingError.message(error)
     }
   }
 
@@ -1435,8 +1526,10 @@ final class AppModel {
       let snapshot = try await controlClient.querySystemCompatibilityState()
       systemCompatibilityState = snapshot
       if snapshot.catalogDigest != systemCompatibilityCatalogDigest {
-        systemCompatibilitySynchronizationWarning =
-          "The app and protection extension use different system compatibility definitions. Ordinary policy editing remains available, but profile editing is disabled until the installed components match."
+        systemCompatibilitySynchronizationWarning = String(
+          localized:
+            "The app and extension use different system compatibility definitions. You can still edit policies, but compatibility profiles can’t be changed until matching versions are installed."
+        )
       } else {
         let unresolved = snapshot.profileResolutions.filter {
           $0.isEnabled && $0.state != .active
@@ -1444,12 +1537,13 @@ final class AppModel {
         systemCompatibilitySynchronizationWarning =
           unresolved.isEmpty
           ? nil
-          : "One or more enabled system compatibility profiles require review."
+          : String(localized: "One or more turned-on system compatibility profiles need review.")
       }
     } catch {
       systemCompatibilityState = nil
-      systemCompatibilitySynchronizationWarning =
-        "System compatibility state could not be synchronized: \(error)"
+      systemCompatibilitySynchronizationWarning = String(
+        localized:
+          "The system compatibility state could not be read: \(UserFacingError.message(error))")
     }
   }
 
@@ -1477,17 +1571,25 @@ final class AppModel {
       var warnings: [String] = []
       if let reportedIdentifier, policySet.setIdentifier != reportedIdentifier {
         warnings.append(
-          "Runtime status and the policy query reported different policy-set identifiers."
+          String(
+            localized:
+              "The runtime status and the saved policies report different policy set identifiers.")
         )
       }
       if let reportedRevision, policySet.revision != reportedRevision {
         warnings.append(
-          "Runtime status reported revision \(reportedRevision), but the policy query returned revision \(policySet.revision)."
+          String(
+            localized:
+              "The runtime status reports revision \(reportedRevision), but the saved policies are revision \(policySet.revision)."
+          )
         )
       }
       if !dirtyPolicyIDs.isEmpty {
         warnings.append(
-          "The active policy set changed while local drafts were edited. The drafts were kept; saving replaces only the selected policy in the latest active set."
+          String(
+            localized:
+              "The saved policies changed while you were editing. Your unsaved changes were kept; saving replaces only the selected policy in the latest saved policies."
+          )
         )
       }
       policySynchronizationWarning =
@@ -1499,12 +1601,15 @@ final class AppModel {
         acceptedRevision = 0
         policySynchronizationWarning = nil
       } else {
-        let runtimeDescription =
-          reportedRevision.map {
-            "reports policy-set revision \($0)"
-          } ?? "does not currently report an active policy-set revision"
+        let detail = UserFacingError.message(error)
         policySynchronizationWarning =
-          "Runtime status \(runtimeDescription), but the stored policy set could not be synchronized: \(error)"
+          reportedRevision.map {
+            String(
+              localized:
+                "The extension reports policy revision \($0), but the saved policies could not be read: \(detail)"
+            )
+          }
+          ?? String(localized: "The saved policies could not be read: \(detail)")
       }
     }
   }
@@ -1572,7 +1677,8 @@ final class AppModel {
         break
       }
     }
-    let description = "The extension query ended without returning version information."
+    let description = String(
+      localized: "macOS finished the extension query without returning version information.")
     installationPropertiesError = description
     throw AppModelError.installationPropertiesFailed(description)
   }
@@ -1587,7 +1693,8 @@ final class AppModel {
     )
     guard shouldRequestActivation else { return }
 
-    operationMessage = "A newer embedded system extension was found. Requesting an update."
+    operationMessage = String(
+      localized: "The app includes a newer extension. Asking macOS to update it.")
     _ = await performLifecycleRequest(
       events: activationController.activationEvents(), tracksActivation: true
     )
@@ -1643,13 +1750,13 @@ final class AppModel {
     events: AsyncStream<ActivationEvent>, tracksActivation: Bool = false
   ) async -> LifecycleRequestOutcome {
     guard !isBusy else {
-      return .failed("Another Pasu FS operation is already in progress.")
+      return .failed(String(localized: "Another Pasu FS operation is already in progress."))
     }
     isBusy = true
     lastError = nil
     if tracksActivation {
       isRequestingActivation = true
-      activationProgress = "Updating extension…"
+      activationProgress = String(localized: "Updating the extension…")
       activationOutcome = nil
     }
     defer {
@@ -1663,18 +1770,23 @@ final class AppModel {
     for await event in events {
       switch event {
       case .submitted(let action):
-        operationMessage = "Submitted \(action) request."
+        operationMessage =
+          action == "deactivate"
+          ? String(localized: "Sent the deactivation request to macOS.")
+          : String(localized: "Sent the activation request to macOS.")
       case .waitingForUserApproval:
-        operationMessage = "Waiting for approval in System Settings."
-        if tracksActivation { activationProgress = "Approval required in System Settings" }
+        operationMessage = String(localized: "Waiting for approval in System Settings.")
+        if tracksActivation {
+          activationProgress = String(localized: "Approval needed in System Settings")
+        }
       case .replacing(let existing, let new):
-        operationMessage = "Replacing version \(existing) with \(new)."
-        if tracksActivation { activationProgress = "Updating extension…" }
+        operationMessage = String(localized: "Replacing build \(existing) with build \(new).")
+        if tracksActivation { activationProgress = String(localized: "Updating the extension…") }
       case .completed(let rebootRequired):
         operationMessage =
           rebootRequired
-          ? "The request will complete after restart."
-          : "The request completed."
+          ? String(localized: "The request will finish after the Mac restarts.")
+          : String(localized: "macOS completed the request.")
         outcome = rebootRequired ? .requiresRestart : .completed
       case .failed(_, _, let description):
         lastError = description
@@ -1686,17 +1798,20 @@ final class AppModel {
     await refreshHealth()
     let result =
       outcome
-      ?? .failed("The system-extension request ended without a completion result.")
+      ?? .failed(
+        String(localized: "macOS ended the system extension request without a result."))
     if tracksActivation { activationOutcome = result }
     return result
   }
 }
 
-private enum AppModelError: Error, CustomStringConvertible {
+enum AppModelError: Error, CustomStringConvertible, UserFacingErrorConvertible {
   case policyRevisionExhausted
   case policySetReceiptMismatch
   case duplicateRuleIdentity
   case auditIdentityIncomplete
+  case signingIdentifierRequired
+  case applicationHasNoTeamIdentifier
   case systemCompatibilityCatalogMismatch
   case systemCompatibilityRequiresSavedPolicy
   case systemCompatibilityRequiresWhitelist
@@ -1705,30 +1820,50 @@ private enum AppModelError: Error, CustomStringConvertible {
   case systemCompatibilityRevisionExhausted
   case installationPropertiesFailed(String)
 
+  /// Interpolated into runtime messages; the properties failure keeps macOS's own text.
   var description: String {
     switch self {
-    case .policyRevisionExhausted:
-      "The policy-set revision counter is exhausted."
-    case .policySetReceiptMismatch:
-      "The extension returned a receipt for a different policy set or revision."
-    case .duplicateRuleIdentity:
-      "This program identity already has a rule in the selected policy."
-    case .auditIdentityIncomplete:
-      "The audit record does not contain a complete supported signing identity."
-    case .systemCompatibilityCatalogMismatch:
-      "System compatibility profiles cannot be edited until the app and extension use matching built-in catalogs."
-    case .systemCompatibilityRequiresSavedPolicy:
-      "Save this policy before changing its system compatibility profiles."
-    case .systemCompatibilityRequiresWhitelist:
-      "System compatibility profiles apply only to Whitelist policies."
-    case .systemCompatibilityProfileMissing:
-      "The selected system compatibility profile is not in the built-in catalog."
-    case .systemCompatibilityReceiptMismatch:
-      "The extension returned a receipt for different system compatibility settings."
-    case .systemCompatibilityRevisionExhausted:
-      "The system compatibility settings revision counter is exhausted."
     case .installationPropertiesFailed(let description):
       description
+    default:
+      userFacingMessage
+    }
+  }
+
+  var userFacingMessage: String {
+    switch self {
+    case .policyRevisionExhausted:
+      String(localized: "The policy revision counter has reached its limit.")
+    case .policySetReceiptMismatch:
+      String(localized: "The extension confirmed a different policy set or revision.")
+    case .duplicateRuleIdentity:
+      String(localized: "This program already has a rule in this policy.")
+    case .auditIdentityIncomplete:
+      String(localized: "The record does not contain a complete signing identity.")
+    case .signingIdentifierRequired:
+      String(localized: "Enter a Signing ID.")
+    case .applicationHasNoTeamIdentifier:
+      String(
+        localized:
+          "This app has no Team ID. Only developer-signed apps and Apple platform binaries can be added."
+      )
+    case .systemCompatibilityCatalogMismatch:
+      String(
+        localized:
+          "Compatibility profiles can’t be changed until the app and extension use the same built-in definitions."
+      )
+    case .systemCompatibilityRequiresSavedPolicy:
+      String(localized: "Save this policy before changing its compatibility profiles.")
+    case .systemCompatibilityRequiresWhitelist:
+      String(localized: "Compatibility profiles apply only to Whitelist policies.")
+    case .systemCompatibilityProfileMissing:
+      String(localized: "The selected compatibility profile is not in the built-in definitions.")
+    case .systemCompatibilityReceiptMismatch:
+      String(localized: "The extension confirmed different compatibility settings.")
+    case .systemCompatibilityRevisionExhausted:
+      String(localized: "The compatibility settings revision counter has reached its limit.")
+    case .installationPropertiesFailed(let description):
+      String(localized: "macOS did not report the system extension state: \(description)")
     }
   }
 }

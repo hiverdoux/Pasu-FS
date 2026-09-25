@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import PasuFSConfiguration
 import PasuFSMaintenanceCore
 import XCTest
 
@@ -7,11 +8,13 @@ import XCTest
 
 final class MaintenanceTests: XCTestCase {
   func testRemoteErrorKeepsDescriptionAfterSecureArchiving() throws {
-    let error = MaintenanceContract.remoteError(MaintenanceError("An explicit failure reason."))
+    let error = MaintenanceContract.remoteError(MaintenanceError(.authorizationCanceled))
     let data = try NSKeyedArchiver.archivedData(withRootObject: error, requiringSecureCoding: true)
     let decoded = try XCTUnwrap(
       NSKeyedUnarchiver.unarchivedObject(ofClass: NSError.self, from: data))
-    XCTAssertEqual(decoded.localizedDescription, "An explicit failure reason.")
+    XCTAssertEqual(
+      decoded.localizedDescription,
+      "Administrator authentication was canceled. No files were removed.")
   }
   func testBuildVersionsPermitRepairAndUpgradeButRejectDowngradeAndUnknownVersions() throws {
     try ProductBuildVersion.validateUpgrade(incoming: "11", installed: nil)
@@ -114,11 +117,125 @@ final class MaintenanceTests: XCTestCase {
     XCTAssertNil(try store.read())
   }
 
+  func testStateStoreWorksUnderASymbolicLinkAlias() throws {
+    // Any symbolic link among the parents of the storage root must work like a real path.
+    let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let real = root.appendingPathComponent("real", isDirectory: true)
+    try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+    let alias = root.appendingPathComponent("alias", isDirectory: true)
+    try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: real)
+    let store = try UninstallStateStore(
+      root: alias.appendingPathComponent("state", isDirectory: true), owner: getuid())
+    let pending = UninstallState(phase: .awaitingRestart, removeData: false)
+    try store.write(pending)
+    XCTAssertEqual(try store.read(), pending)
+    try store.clear()
+    XCTAssertNil(try store.read())
+    XCTAssertFalse(
+      FileManager.default.fileExists(
+        atPath: real.appendingPathComponent("state/\(MaintenanceContract.stateFilename)").path))
+  }
+
+  func testStateStoreWorksUnderTheSystemTemporaryAlias() throws {
+    // macOS reaches /tmp through a symbolic link, and Foundation's standardized paths hide the
+    // real /private/tmp location. The store must write and remove through that alias.
+    let name = "pasu-maintenance-tests-\(UUID().uuidString)"
+    let physical = URL(fileURLWithPath: "/private/tmp/\(name)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: physical) }
+    let store = try UninstallStateStore(
+      root: URL(fileURLWithPath: "/tmp/\(name)/state", isDirectory: true), owner: getuid())
+    let pending = UninstallState(phase: .awaitingRestart, removeData: false)
+    try store.write(pending)
+    let stateFile = physical.appendingPathComponent("state/\(MaintenanceContract.stateFilename)")
+    XCTAssertTrue(FileManager.default.fileExists(atPath: stateFile.path))
+    XCTAssertEqual(try store.read(), pending)
+    try store.clear()
+    XCTAssertFalse(FileManager.default.fileExists(atPath: stateFile.path))
+  }
+
+  func testStorageRootThatIsASymbolicLinkIsRefused() throws {
+    let root = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let real = root.appendingPathComponent("real", isDirectory: true)
+    try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+    let alias = root.appendingPathComponent("alias", isDirectory: true)
+    try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: real)
+    let store = try UninstallStateStore(root: alias, owner: getuid())
+    XCTAssertThrowsError(try store.write(UninstallState(phase: .prepared, removeData: false)))
+    XCTAssertThrowsError(try SafeRemoval.validateRoot(alias, requiredOwner: getuid()))
+    XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: real.path), [])
+  }
+
+  func testErrorCodeRawValuesArePersistedFormats() {
+    // Renaming a case would silently change the state file and XPC formats.
+    let expected: Set<String> = [
+      "messageTooLarge", "unknownStateFormat", "invalidPackageBuildVersion",
+      "installedBuildVersionUnknown", "downgradeNotSupported", "approvalExpired",
+      "unsafeRemovalPath", "removalTargetUntrusted", "unexpectedOwner", "mountCrossingRefused",
+      "removalTargetChanged", "systemCallFailed", "authorizationMalformed",
+      "authorizationInvalid", "authorizationRuleUnexpected", "authorizationCanceled",
+      "authorizationDenied", "invalidHandshake", "requestInProgress", "noCurrentApproval",
+      "notRunningAsRoot", "unsupportedOperation", "commandFailed", "runningApplicationsUnknown",
+      "applicationRunning", "installationPathUnreadable", "installationPathNotDirectory",
+      "installationPathOccupied", "installedVersionUnreadable", "componentPermissionsUnsafe",
+      "helperSignatureMismatch", "helperMismatch", "applicationDidNotExit",
+      "receiptUnverifiable", "dataDirectoryNotRemoved", "authorizationRightsNotRegistered",
+      "authorizationRightsNotRemoved", "handshakeMismatch", "connectionLost",
+      "requestNotAccepted", "serviceUnavailable", "serviceNoReply", "invalidReply",
+      "internalFailure",
+    ]
+    XCTAssertEqual(Set(MaintenanceErrorCode.allCases.map(\.rawValue)), expected)
+  }
+
+  func testFailedStateCarriesTheErrorCodeAndDetail() throws {
+    let failure = MaintenanceError(.systemCallFailed, detail: "remove entry failed: Busy")
+    let state = UninstallState(phase: .failed, removeData: true, failure: failure)
+    let decoded = try MaintenanceContract.decode(
+      UninstallState.self, from: MaintenanceContract.encode(state))
+    XCTAssertEqual(decoded.failure, "remove entry failed: Busy.")
+    XCTAssertEqual(decoded.failureCode, .systemCallFailed)
+    XCTAssertEqual(decoded.failureDetail, "remove entry failed: Busy")
+    // A state file written before the code fields existed still decodes.
+    let older = Data(
+      """
+      {"formatVersion":1,"phase":"failed","removeData":false,"failure":"Older text."}
+      """.utf8)
+    let decodedOlder = try MaintenanceContract.decode(UninstallState.self, from: older)
+    XCTAssertEqual(decodedOlder.failure, "Older text.")
+    XCTAssertNil(decodedOlder.failureCode)
+    // A newer maintenance service may record a code this version does not know.
+    let newer = Data(
+      """
+      {"formatVersion":1,"phase":"failed","removeData":false,"failure":"Newer text.","failureCode":"somethingNewer","failureDetail":"x"}
+      """.utf8)
+    let decodedNewer = try MaintenanceContract.decode(UninstallState.self, from: newer)
+    XCTAssertEqual(decodedNewer.failure, "Newer text.")
+    XCTAssertNil(decodedNewer.failureCode)
+    XCTAssertEqual(decodedNewer.failureDetail, "x")
+  }
+
+  func testRemoteErrorCarriesTheCodeAcrossSecureArchiving() throws {
+    let error = MaintenanceContract.remoteError(
+      MaintenanceError(.authorizationDenied, detail: "-60005"))
+    let data = try NSKeyedArchiver.archivedData(withRootObject: error, requiringSecureCoding: true)
+    let decoded = try XCTUnwrap(
+      NSKeyedUnarchiver.unarchivedObject(ofClass: NSError.self, from: data))
+    XCTAssertEqual(decoded.domain, MaintenanceContract.errorDomain)
+    XCTAssertEqual(
+      decoded.userInfo[MaintenanceContract.errorCodeKey] as? String,
+      MaintenanceErrorCode.authorizationDenied.rawValue)
+    XCTAssertEqual(decoded.userInfo[MaintenanceContract.errorDetailKey] as? String, "-60005")
+    XCTAssertEqual(
+      decoded.localizedDescription,
+      "Administrator approval for uninstalling was not granted (OSStatus -60005).")
+  }
+
+  /// A unique directory under the system temporary directory, as a physical path. Removal
+  /// refuses symbolic-link components, and macOS reaches its temporary directory through one.
   private func temporaryDirectory() throws -> URL {
-    // Use the repo's artifact directory; macOS's /var temporary-directory alias is a symlink.
-    let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-      .appendingPathComponent("dist")
-      .appendingPathComponent("pasu-maintenance-tests-\(UUID().uuidString)")
+    let root = PhysicalPath.resolve(FileManager.default.temporaryDirectory)
+      .appendingPathComponent("pasu-maintenance-tests-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     return root
   }

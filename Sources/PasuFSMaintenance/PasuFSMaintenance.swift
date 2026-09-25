@@ -7,16 +7,18 @@ enum PasuFSMaintenanceEntry {
   static func main() {
     do {
       guard geteuid() == 0 else {
-        throw MaintenanceError(
-          "This maintenance executable must be started by macOS Installer or launchd.")
+        throw MaintenanceError(.notRunningAsRoot)
       }
       let arguments = Array(CommandLine.arguments.dropFirst())
       switch arguments {
       case ["--serve"]: try MaintenanceService().run()
       case ["--verify-installed"]: try SystemOperations.validateInstallation()
+      case ["--register-authorization-rights"]:
+        try SystemOperations.validateInstallation()
+        try SystemOperations.registerAuthorizationRights()
       default:
         guard arguments.count == 2, arguments[0] == "--preflight" else {
-          throw MaintenanceError("Unsupported maintenance operation.")
+          throw MaintenanceError(.unsupportedOperation)
         }
         try SystemOperations.preflight(incomingVersion: arguments[1])
       }

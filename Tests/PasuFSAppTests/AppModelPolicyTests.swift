@@ -47,6 +47,10 @@ final class AppModelPolicyTests: XCTestCase {
     XCTAssertEqual(model.policyDraft(id: secondID)?.name, "Policy 2")
     XCTAssertEqual(model.policyDraft(id: firstID)?.protectedRootPath, "/Users/example/First")
     XCTAssertEqual(model.sidebarPolicies.count, 2)
+    XCTAssertEqual(model.policyDraft(id: secondID)?.mode, .audit)
+    XCTAssertEqual(model.policyDraft(id: secondID)?.policyType, .whitelist)
+    XCTAssertEqual(model.policyDraft(id: secondID)?.protectedRootPath, "")
+    XCTAssertEqual(model.pendingFolderEntryPolicyID, secondID)
   }
 
   func testUnsavedCreationOrderSurvivesSavingPoliciesInReverseOrder() throws {
@@ -130,7 +134,17 @@ final class AppModelPolicyTests: XCTestCase {
     let active = makePolicySet()
     let model = AppModel(initialPolicySet: active)
     let policyID = active.policies[0].id
-    model.auditBatch = AuditLogBatch(records: [
+    let log = try XCTUnwrap(model.policyLogState(policyID: policyID))
+    log.batch = AuditLogBatch(records: [
+      AuditEventRecord(
+        timestamp: Date(timeIntervalSince1970: 50),
+        eventType: "NOTIFY_EXEC",
+        executablePath: "/usr/libexec/xpcproxy",
+        signingIdentifier: "com.apple.xpc.proxy",
+        isPlatformBinary: true,
+        policyDecision: "no-rule-match",
+        kernelResponse: "notify-only"
+      ),
       AuditEventRecord(
         timestamp: Date(timeIntervalSince1970: 10),
         eventType: "AUTH_OPEN",
@@ -168,7 +182,7 @@ final class AppModelPolicyTests: XCTestCase {
       ),
     ])
 
-    let candidates = model.auditRuleCandidates
+    let candidates = model.ruleCandidates(policyID: policyID)
     XCTAssertEqual(candidates.count, 1)
     let candidate = try XCTUnwrap(candidates.first)
     XCTAssertEqual(candidate.teamIdentifier, "TEAM123456")
@@ -177,118 +191,6 @@ final class AppModelPolicyTests: XCTestCase {
 
     XCTAssertTrue(model.policyContainsIdentity(policyID: policyID, candidate: candidate))
     XCTAssertThrowsError(try model.addRule(policyID: policyID, from: candidate))
-  }
-
-  func testSystemCompatibilityAuditCandidatesUsePolicyEvaluationNotKernelResponse() throws {
-    var active = makePolicySet()
-    active.policies[0].mode = .audit
-    let model = AppModel(initialPolicySet: active)
-    let policy = active.policies[0]
-    let signingIdentifier = "com.apple.example.backupd"
-    func evaluation(
-      mode: PolicyMode = .audit,
-      policyType: PolicyType = .whitelist,
-      match: PolicyRuleMatchKind = .none,
-      decision: PolicyEvaluationDecision
-    ) -> PolicyEvaluationRecord {
-      PolicyEvaluationRecord(
-        policyIdentifier: policy.id,
-        policyName: policy.name,
-        mode: mode,
-        policyType: policyType,
-        match: match,
-        decision: decision
-      )
-    }
-    model.auditBatch = AuditLogBatch(records: [
-      AuditEventRecord(
-        timestamp: Date(timeIntervalSince1970: 10),
-        policySetIdentifier: active.setIdentifier,
-        policyRevision: active.revision,
-        eventType: "AUTH_OPEN",
-        executablePath: "/System/Library/PrivateFrameworks/Example.framework/exampled",
-        signingIdentifier: signingIdentifier,
-        isPlatformBinary: true,
-        codeSigningFlags: 0x0400_0001,
-        operatingSystemBuild: "23A000",
-        targetPath: "/Users/example/First/a",
-        pathWasTruncated: false,
-        requestedFlags: Int32(FREAD),
-        policyDecision: "audit-only",
-        kernelResponse: "allow",
-        policyEvaluations: [evaluation(mode: .audit, decision: .wouldDeny)]
-      ),
-      AuditEventRecord(
-        timestamp: Date(timeIntervalSince1970: 20),
-        policySetIdentifier: active.setIdentifier,
-        policyRevision: active.revision,
-        eventType: "AUTH_OPEN",
-        signingIdentifier: signingIdentifier,
-        isPlatformBinary: true,
-        codeSigningFlags: 0x0400_0001,
-        operatingSystemBuild: "23A000",
-        targetPath: "/Users/example/First/b",
-        pathWasTruncated: false,
-        requestedFlags: Int32(FREAD | FWRITE),
-        policyDecision: "audit-only",
-        kernelResponse: "allow",
-        policyEvaluations: [evaluation(decision: .wouldDeny)]
-      ),
-      AuditEventRecord(
-        timestamp: Date(timeIntervalSince1970: 25),
-        policySetIdentifier: active.setIdentifier,
-        policyRevision: active.revision,
-        eventType: "AUTH_OPEN",
-        signingIdentifier: signingIdentifier,
-        isPlatformBinary: true,
-        codeSigningFlags: 0x0400_0001,
-        operatingSystemBuild: "23A001",
-        targetPath: "/Users/example/First/new-build",
-        pathWasTruncated: false,
-        requestedFlags: Int32(FWRITE),
-        policyDecision: "audit-only",
-        kernelResponse: "allow",
-        policyEvaluations: [evaluation(decision: .wouldDeny)]
-      ),
-      AuditEventRecord(
-        timestamp: Date(timeIntervalSince1970: 30),
-        policySetIdentifier: active.setIdentifier,
-        policyRevision: active.revision,
-        eventType: "AUTH_OPEN",
-        signingIdentifier: signingIdentifier,
-        isPlatformBinary: true,
-        codeSigningFlags: 0x0400_0001,
-        operatingSystemBuild: "23A000",
-        targetPath: "/Users/example/First/c",
-        pathWasTruncated: false,
-        requestedFlags: Int32(FREAD),
-        policyDecision: "denied",
-        kernelResponse: "deny",
-        policyEvaluations: [
-          evaluation(policyType: .blacklist, decision: .deny),
-          evaluation(match: .direct, decision: .deny),
-        ]
-      ),
-    ])
-
-    let candidates = model.systemCompatibilityAuditCandidates(policyID: policy.id)
-    let candidate = try XCTUnwrap(
-      candidates.first { $0.operatingSystemBuild == "23A000" }
-    )
-    XCTAssertEqual(candidates.count, 2)
-    XCTAssertEqual(candidate.signingIdentifier, signingIdentifier)
-    XCTAssertEqual(candidate.operatingSystemBuild, "23A000")
-    XCTAssertEqual(candidate.observationCount, 2)
-    XCTAssertEqual(candidate.requestedFlagValues, [UInt32(FREAD), UInt32(FREAD | FWRITE)])
-    XCTAssertEqual(candidate.requestedFlagUnion, UInt32(FREAD | FWRITE))
-    XCTAssertEqual(candidate.codeSigningFlagValues, [0x0400_0001])
-    XCTAssertEqual(candidate.uniqueTargetPathCount, 2)
-    XCTAssertTrue(candidate.hasCompleteEvidence)
-    XCTAssertEqual(
-      candidates.first { $0.operatingSystemBuild == "23A001" }?.observationCount,
-      1
-    )
-    XCTAssertTrue(model.systemCompatibilityAuditCandidates(policyID: uuid(999)).isEmpty)
   }
 
   func testSystemCompatibilityCatalogStaysSeparateFromPolicyDrafts() throws {

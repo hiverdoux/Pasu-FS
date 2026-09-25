@@ -11,59 +11,18 @@ struct RootView: View {
         OnboardingView(model: model)
       } else {
         NavigationSplitView {
-          List(selection: $model.selectedSection) {
-            Label("Overview", systemImage: "shield")
-              .tag(SidebarSelection.protection)
-            Label("Audit Log", systemImage: "list.bullet.rectangle")
-              .tag(SidebarSelection.auditLog)
-
-            Section("Policies") {
-              ForEach(model.sidebarPolicies) { policy in
-                HStack(spacing: 7) {
-                  Label {
-                    Text(policy.name)
-                  } icon: {
-                    Image(systemName: policy.mode.symbolName)
-                      .foregroundStyle(policy.mode.tint)
-                  }
-                  Spacer(minLength: 4)
-                  if model.isPolicyDirty(policy.id) {
-                    Circle()
-                      .fill(.secondary)
-                      .frame(width: 6, height: 6)
-                      .help("Unsaved changes")
-                  }
-                }
-                .tag(SidebarSelection.policy(policy.id))
-              }
-            }
-          }
-          .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
-          .safeAreaInset(edge: .bottom, alignment: .leading) {
-            VStack(alignment: .leading, spacing: 8) {
-              Button {
-                model.createNewPolicy()
-              } label: {
-                Label("New Policy", systemImage: "plus.circle")
-              }
-              .buttonStyle(.borderless)
-              .keyboardShortcut("n", modifiers: .command)
-              .help("Create a new policy (⌘N)")
-              Text("v\(Bundle.main.shortVersionDescription)")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-            }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 10)
-          }
+          SidebarView(model: model)
+            .navigationSplitViewColumnWidth(min: 190, ideal: 216, max: 280)
         } detail: {
           switch model.selectedSection {
-          case .protection:
-            ProtectionView(model: model)
-          case .auditLog:
-            AuditLogView(model: model)
+          case .overview:
+            OverviewView(model: model)
           case .policy(let id):
-            PolicyView(model: model, policyID: id)
+            PolicyView(
+              model: model, policyID: id,
+              initialTab: model.pendingPolicyLogPolicyID == id ? .log : .settings
+            )
+            .id(id)
           }
         }
       }
@@ -79,6 +38,9 @@ struct RootView: View {
     ) {
       UninstallView(model: model)
     }
+    .sheet(item: $model.addProgramRequest) { request in
+      AddProgramSheet(model: model, request: request)
+    }
     .task {
       if model.pendingUninstall != nil || model.uninstallStateError != nil {
         model.isPresentingUninstall = true
@@ -87,8 +49,111 @@ struct RootView: View {
   }
 }
 
-extension Bundle {
-  var shortVersionDescription: String {
-    (infoDictionary?["CFBundleShortVersionString"] as? String) ?? "dev"
+private struct SidebarView: View {
+  @Bindable var model: AppModel
+
+  var body: some View {
+    List(selection: $model.selectedSection) {
+      Label("Overview", systemImage: "shield")
+        .tag(SidebarSelection.overview)
+
+      Section("Policies") {
+        ForEach(model.sidebarPolicies) { policy in
+          SidebarPolicyRow(policy: policy, isDirty: model.isPolicyDirty(policy.id))
+            .listItemTint(policy.mode.tint)
+            .tag(SidebarSelection.policy(policy.id))
+        }
+      }
+    }
+    .toolbar {
+      ToolbarItem {
+        Button {
+          model.createNewPolicy()
+        } label: {
+          Label("New Policy", systemImage: "plus")
+        }
+        .disabled(!model.canCreatePolicy)
+        .help("Create a new policy (⌘N)")
+      }
+    }
   }
+}
+
+private struct SidebarPolicyRow: View {
+  let policy: DirectoryPolicyDraft
+  let isDirty: Bool
+
+  @State private var isHighlighted = false
+
+  // Sidebars draw label icons in the list item tint and switch them to the selection's text color
+  // on a highlighted row. The unsaved-changes dot isn't a label icon, so it follows the row itself.
+  var body: some View {
+    HStack {
+      Label {
+        Text(policy.name.isEmpty ? String(localized: "Untitled Policy") : policy.name)
+          .lineLimit(1)
+      } icon: {
+        Image(systemName: policy.mode.symbolName)
+      }
+      Spacer()
+      if isDirty {
+        Image(systemName: "circle.fill")
+          .imageScale(.small)
+          .foregroundStyle(isHighlighted ? AnyShapeStyle(.white) : AnyShapeStyle(.orange))
+          .help("Unsaved changes")
+          .accessibilityLabel("Unsaved changes")
+          .background(RowHighlightReader(isHighlighted: $isHighlighted))
+      }
+    }
+  }
+}
+
+/// Reports whether the sidebar row containing this view shows the emphasized (accent color)
+/// selection, which AppKit draws only while the sidebar is focused in the key window.
+private struct RowHighlightReader: NSViewRepresentable {
+  @Binding var isHighlighted: Bool
+
+  func makeNSView(context: Context) -> RowHighlightView {
+    let view = RowHighlightView()
+    view.onChange = { isHighlighted = $0 }
+    return view
+  }
+
+  func updateNSView(_ nsView: RowHighlightView, context: Context) {
+    nsView.onChange = { isHighlighted = $0 }
+  }
+}
+
+private final class RowHighlightView: NSView {
+  var onChange: ((Bool) -> Void)?
+  private var observations: [NSKeyValueObservation] = []
+  private var reported: Bool?
+
+  override func viewDidMoveToWindow() {
+    super.viewDidMoveToWindow()
+    observations = []
+    var ancestor = superview
+    while let view = ancestor, !(view is NSTableRowView) { ancestor = view.superview }
+    guard let row = ancestor as? NSTableRowView else { return report(false) }
+    // AppKit changes a row's selection state on the main thread.
+    observations = [\NSTableRowView.isSelected, \.isEmphasized].map { keyPath in
+      row.observe(keyPath) { [weak self] row, _ in
+        MainActor.assumeIsolated { self?.update(from: row) }
+      }
+    }
+    update(from: row)
+  }
+
+  private func update(from row: NSTableRowView) {
+    report(row.isSelected && row.isEmphasized)
+  }
+
+  private func report(_ value: Bool) {
+    guard value != reported else { return }
+    reported = value
+    // Not during AppKit's or SwiftUI's own update of the row.
+    DispatchQueue.main.async { [weak self] in self?.onChange?(value) }
+  }
+
+  override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }

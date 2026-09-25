@@ -453,6 +453,31 @@ final class AppLifecycleTests: XCTestCase {
     XCTAssertTrue(model.operationMessage?.contains("Restart") == true)
   }
 
+  func testPendingUninstallFailureIsShownInTheUsersLanguage() throws {
+    let failed = UninstallState(
+      phase: .failed, removeData: false, failure: MaintenanceError(.dataDirectoryNotRemoved))
+    let model = AppModel(
+      runtimeController: FakeRuntimeController(),
+      maintenanceClient: FakeMaintenanceClient(pending: failed),
+      uninstallAuthorizer: FakeUninstallAuthorizer(), uninstallStateReader: { failed })
+    XCTAssertEqual(
+      model.pendingUninstallFailureMessage,
+      UserFacingError.maintenance(.dataDirectoryNotRemoved, detail: nil))
+
+    // A state file from a service without failure codes keeps its English text.
+    let older = try MaintenanceContract.decode(
+      UninstallState.self,
+      from: Data(
+        """
+        {"formatVersion":1,"phase":"failed","removeData":false,"failure":"Older text."}
+        """.utf8))
+    let olderModel = AppModel(
+      runtimeController: FakeRuntimeController(),
+      maintenanceClient: FakeMaintenanceClient(pending: older),
+      uninstallAuthorizer: FakeUninstallAuthorizer(), uninstallStateReader: { older })
+    XCTAssertEqual(olderModel.pendingUninstallFailureMessage, "Older text.")
+  }
+
   func testUninstallCannotContinueBeforeRequiredRestart() async {
     let pending = UninstallState(phase: .awaitingRestart, removeData: true)
     let helper = FakeMaintenanceClient(pending: pending)
@@ -533,7 +558,8 @@ final class AppLifecycleTests: XCTestCase {
       uninstallStateReader: { nil })
     let accepted = await model.uninstall(removeData: false)
     XCTAssertFalse(accepted)
-    XCTAssertTrue(model.lastError?.contains("cleanup rejected") == true)
+    XCTAssertEqual(
+      model.lastError, UserFacingError.maintenance(.requestNotAccepted, detail: nil))
   }
 
   func testPendingUninstallSuppressesAutomaticExtensionUpdate() async {
@@ -700,7 +726,7 @@ private final class FakeUninstallAuthorizer: UninstallAuthorizing {
     -> UninstallTicket
   {
     calls += 1
-    if denied { throw MaintenanceError("Authorization cancelled") }
+    if denied { throw MaintenanceError(.authorizationCanceled) }
     return try await client.prepare(authorization: Data(), removeData: removeData)
   }
 }
@@ -721,7 +747,7 @@ private actor FakeMaintenanceClient: MaintenanceControlling {
   }
   func commit(ticket: UninstallTicket, action: UninstallCommitAction) async throws {
     actions.append(action)
-    if failCommit { throw MaintenanceError("cleanup rejected") }
+    if failCommit { throw MaintenanceError(.requestNotAccepted) }
   }
   func invalidate() async {}
 }

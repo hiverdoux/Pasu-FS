@@ -1,0 +1,23 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "NSSystemExtensionUsageDescription" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pasu FS uses Endpoint Security to authorize supported file operations in user-selected test directories."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pasu FS는 Endpoint Security로 사용자가 선택한 시험용 폴더에서 지원되는 파일 작업을 허용하거나 거부합니다."
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

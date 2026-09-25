@@ -38,9 +38,11 @@ by macOS or another security component.
 
 ## Known limitations
 
-- The current extension handles `AUTH_OPEN`. Other operation types do not have
+- The current extension handles `AUTH_OPEN`. Opening a folder to list its
+  contents is such an open and is checked. Other operation types do not have
   complete enforcement, including create, rename, delete, link, clone, truncate,
-  copy, directory enumeration and memory mapping.
+  copy and memory mapping. Reading the metadata of a path by name, such as
+  `stat`, does not open the file and is not checked.
 - Existing file descriptors or mappings are not revoked. Protection is not a
   record of every individual read or write.
 - An allowed program can copy, transmit or reveal information it reads. Attacks
@@ -63,7 +65,9 @@ by macOS or another security component.
 
 Installation and removal require administrator authorization. State-changing
 command-line operations request a new authorization for that operation; status
-queries are read-only. Local component connections verify code signatures.
+queries are read-only. Each operation's authorization entry requires a fresh,
+non-shared administrator authentication. The installer defines the entries as
+root, and clients refuse an entry whose rule no longer matches. Local component connections verify code signatures.
 The maintenance service has no arbitrary shell command or arbitrary path-removal
 interface. Removal checks ownership, avoids following symbolic links and refuses
 to cross mounted filesystems.

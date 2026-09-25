@@ -2,12 +2,14 @@ import Darwin
 import Foundation
 
 /// Descriptor-relative deletion. Never resolves a symlink, crosses a mount, or obtains paths from policy data.
+/// Callers pass physical paths (see `PhysicalPath`): a symbolic link anywhere in the path,
+/// including the `/tmp` and `/var` aliases, is refused by design.
 public enum SafeRemoval {
   public static func remove(_ url: URL, requiredOwner: uid_t = 0) throws {
     let components = url.pathComponents.filter { $0 != "/" }
     guard url.path.hasPrefix("/"), !components.isEmpty,
       !components.contains(".."), !components.contains(".")
-    else { throw MaintenanceError("Unsafe removal path.") }
+    else { throw MaintenanceError(.unsafeRemovalPath) }
     var parent = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
     guard parent >= 0 else { throw systemError("open root") }
     defer { close(parent) }
@@ -27,8 +29,7 @@ public enum SafeRemoval {
     if result < 0, errno == ENOENT { return }
     guard result == 0 else { throw systemError("inspect removal target") }
     guard info.st_uid == requiredOwner, info.st_mode & S_IFMT != S_IFLNK else {
-      throw MaintenanceError(
-        "The removal target has an unexpected owner or is a symbolic link: \(url.path)")
+      throw MaintenanceError(.removalTargetUntrusted, detail: url.path)
     }
   }
 
@@ -40,10 +41,10 @@ public enum SafeRemoval {
       throw systemError("inspect entry")
     }
     guard info.st_uid == owner else {
-      throw MaintenanceError("Unexpected owner during removal: \(name)")
+      throw MaintenanceError(.unexpectedOwner, detail: name)
     }
     if let device, info.st_dev != device {
-      throw MaintenanceError("Refusing to cross a mounted filesystem.")
+      throw MaintenanceError(.mountCrossingRefused)
     }
     if info.st_mode & S_IFMT == S_IFDIR {
       let directory = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
@@ -51,7 +52,7 @@ public enum SafeRemoval {
       defer { close(directory) }
       var opened = stat()
       guard fstat(directory, &opened) == 0, sameFile(info, opened) else {
-        throw MaintenanceError("Removal target changed while opening it.")
+        throw MaintenanceError(.removalTargetChanged, detail: "while opening it")
       }
       let duplicate = dup(directory)
       guard duplicate >= 0 else { throw systemError("duplicate directory") }
@@ -77,7 +78,7 @@ public enum SafeRemoval {
       var current = stat()
       guard fstatat(parent, name, &current, AT_SYMLINK_NOFOLLOW) == 0, sameFile(opened, current)
       else {
-        throw MaintenanceError("Removal target changed before unlinking it.")
+        throw MaintenanceError(.removalTargetChanged, detail: "before unlinking it")
       }
       guard unlinkat(parent, name, AT_REMOVEDIR) == 0 else { throw systemError("remove directory") }
     } else {
@@ -90,6 +91,7 @@ public enum SafeRemoval {
     lhs.st_dev == rhs.st_dev && lhs.st_ino == rhs.st_ino && lhs.st_uid == rhs.st_uid
   }
   private static func systemError(_ operation: String) -> MaintenanceError {
-    MaintenanceError("\(operation) failed: \(String(cString: strerror(errno))).")
+    MaintenanceError(
+      .systemCallFailed, detail: "\(operation) failed: \(String(cString: strerror(errno)))")
   }
 }

@@ -1,0 +1,7 @@
+/* Shown when Pasu FS is running while the installer starts. */
+"QUIT_APP_TITLE" = "Quit Pasu FS before installing";
+"QUIT_APP_MESSAGE" = "Pasu FS is running. Quit it normally, then close and reopen this installer. Protection continues when the app quits; do not use Stop Protection and Quit for an update.";
+
+/* Shown when the installer cannot list running applications. */
+"CHECK_FAILED_TITLE" = "Unable to check running applications";
+"CHECK_FAILED_MESSAGE" = "Close Pasu FS and reopen this installer. No application files have been changed.";

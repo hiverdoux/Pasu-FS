@@ -40,7 +40,7 @@ public actor MaintenanceClient: MaintenanceControlling {
       let data = try await receive { reply in proxy.status(nonce, withReply: reply) }
       let status = try MaintenanceContract.decode(MaintenanceStatus.self, from: data)
       guard status.nonce == nonce, status.version == MaintenanceContract.protocolVersion else {
-        throw MaintenanceError("The maintenance service handshake did not match this app.")
+        throw MaintenanceError(.handshakeMismatch)
       }
       authenticated = true
       return status.state
@@ -63,7 +63,7 @@ public actor MaintenanceClient: MaintenanceControlling {
 
   public func commit(ticket: UninstallTicket, action: UninstallCommitAction) async throws {
     guard authenticated else {
-      throw MaintenanceError("The uninstall connection was lost. Please try again.")
+      throw MaintenanceError(.connectionLost)
     }
     let proxy = try makeProxy()
     let request = try MaintenanceContract.encode(
@@ -72,7 +72,7 @@ public actor MaintenanceClient: MaintenanceControlling {
     let acknowledgement = try MaintenanceContract.decode(
       MaintenanceAcknowledgement.self, from: data)
     guard acknowledgement.accepted else {
-      throw MaintenanceError("The uninstall request was not accepted.")
+      throw MaintenanceError(.requestNotAccepted)
     }
   }
 
@@ -102,8 +102,7 @@ public actor MaintenanceClient: MaintenanceControlling {
       let proxy = connection?.remoteObjectProxyWithErrorHandler({ _ in })
         as? PasuFSMaintenanceXPCProtocol
     else {
-      throw MaintenanceError(
-        "The maintenance service is unavailable. Reinstall the Pasu FS package.")
+      throw MaintenanceError(.serviceUnavailable)
     }
     return proxy
   }
@@ -115,10 +114,7 @@ public actor MaintenanceClient: MaintenanceControlling {
     try await withCheckedThrowingContinuation { continuation in
       let gate = XPCReplyGate(continuation)
       DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
-        gate.resume(
-          throwing: MaintenanceError(
-            "The maintenance service did not reply. Check its background-item permission or reinstall the package."
-          ))
+        gate.resume(throwing: MaintenanceError(.serviceNoReply))
       }
       invocation { data, error in
         if let error {
@@ -126,7 +122,7 @@ public actor MaintenanceClient: MaintenanceControlling {
         } else if let data {
           gate.resume(returning: data)
         } else {
-          gate.resume(throwing: MaintenanceError("Invalid maintenance reply."))
+          gate.resume(throwing: MaintenanceError(.invalidReply))
         }
       }
     }

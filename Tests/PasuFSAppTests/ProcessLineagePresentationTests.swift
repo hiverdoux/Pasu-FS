@@ -31,10 +31,8 @@ final class ProcessLineagePresentationTests: XCTestCase {
     log.filterText = "example.middle"
     XCTAssertEqual(log.rows.count, 1)
     XCTAssertEqual(log.rows.first?.process, "Terminal > cat")
-    let model = AppModel()
-    model.auditBatch = AuditLogBatch(records: [record])
-    model.auditFilterText = "middle-tool"
-    XCTAssertEqual(model.filteredAuditRecords.count, 1)
+    log.filterText = "middle-tool"
+    XCTAssertEqual(log.rows.count, 1)
     record.processLineage?.responsible = actor
     XCTAssertEqual(record.processPreview, "cat > cat")
     record.processLineage?.responsible = LineageProcessKey(pid: 99, version: 2)

@@ -14,23 +14,41 @@ final class AdministrativeAuthorizationTests: XCTestCase {
       "com.example.pasu.fs.extension.deactivate"
     )
     XCTAssertEqual(
-      AdministrativeAuthorizationOperation.policyModify.rightName,
-      "com.example.pasu.fs.policy.modify"
+      AdministrativeAuthorizationOperation.uninstall.rightName,
+      "com.example.pasu.fs.uninstall"
     )
-    XCTAssertEqual(
-      AdministrativeAuthorizationOperation.compatibilityModify.rightName,
-      "com.example.pasu.fs.compatibility.modify"
-    )
+    XCTAssertEqual(AdministrativeAuthorizationOperation.allCases.count, 3)
     XCTAssertTrue(
       AdministrativeAuthorizationOperation.extensionActivate.prompt.contains("activate")
     )
     XCTAssertTrue(
       AdministrativeAuthorizationOperation.extensionDeactivate.prompt.contains("deactivate")
     )
+    XCTAssertTrue(AdministrativeAuthorizationOperation.uninstall.prompt.contains("uninstall"))
     XCTAssertEqual(
       AdministrativeAuthorizationRule.authenticationRuleName,
       "authenticate-admin"
     )
+  }
+
+  func testPromptsAreTranslatedInTheAppCatalog() throws {
+    // macOS reads each prompt from the app's Localizable.strings when the right is
+    // registered, so every prompt must be a catalog key with a manual extraction state.
+    let repository = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    let catalog = repository.appendingPathComponent(
+      "Product/Localization/App/Localizable.xcstrings")
+    let object = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: Data(contentsOf: catalog)) as? [String: Any])
+    let strings = try XCTUnwrap(object["strings"] as? [String: [String: Any]])
+    for operation in AdministrativeAuthorizationOperation.allCases {
+      let entry = try XCTUnwrap(strings[operation.prompt], operation.prompt)
+      XCTAssertEqual(entry["extractionState"] as? String, "manual", operation.prompt)
+      let korean = (entry["localizations"] as? [String: Any])?["ko"] as? [String: Any]
+      let unit = korean?["stringUnit"] as? [String: Any]
+      XCTAssertEqual(unit?["state"] as? String, "translated", operation.prompt)
+      XCTAssertFalse((unit?["value"] as? String ?? "").isEmpty, operation.prompt)
+    }
   }
 
   func testRightDefinitionRequiresFreshNonSharedAdminAuthentication() {

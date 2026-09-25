@@ -76,7 +76,7 @@ public final class ProcessLineageTracker: @unchecked Sendable {
         if let previous = lastGlobalSequence, current > previous, current - previous > 1 {
           note("kernelEventLoss", count: current - previous - 1, at: event.timestamp)
         } else if let previous = lastGlobalSequence, current <= previous {
-          note("Event sequence restarted within this collection.", at: event.timestamp)
+          note("sequenceRestarted", at: event.timestamp)
         }
         lastGlobalSequence = current
       } else if let current = event.sequence, let previous = sequences[event.eventType],

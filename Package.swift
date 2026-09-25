@@ -59,7 +59,7 @@ let package = Package(
     ),
     .testTarget(
       name: "PasuFSMaintenanceTests",
-      dependencies: ["PasuFSMaintenanceCore", "PasuFSMaintenance"]
+      dependencies: ["PasuFSConfiguration", "PasuFSMaintenanceCore", "PasuFSMaintenance"]
     ),
     .executableTarget(
       name: "ESCapabilityProbe",

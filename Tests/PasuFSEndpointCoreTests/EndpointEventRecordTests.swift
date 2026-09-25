@@ -13,7 +13,7 @@ final class EndpointEventRecordTests: XCTestCase {
       isPlatformBinary: true,
       codeSigningFlags: 0x0000_0001,
       operatingSystemBuild: "23A000",
-      policyDecision: "allowed-direct:allow.harness.platform.1",
+      policyDecision: "allowed-direct:allow.example.platform.1",
       kernelResponse: "allow"
     )
 
@@ -34,7 +34,7 @@ final class EndpointEventRecordTests: XCTestCase {
       signingIdentifier: "com.apple.finder",
       isPlatformBinary: true,
       operatingSystemBuild: "23A000",
-      policyDecision: "allowed-direct:allow.harness.platform.1",
+      policyDecision: "allowed-direct:allow.example.platform.1",
       kernelResponse: "allow"
     )
     let encoded = try JSONEncoder().encode(record)

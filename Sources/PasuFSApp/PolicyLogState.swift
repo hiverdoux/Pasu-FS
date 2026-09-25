@@ -6,18 +6,17 @@ struct PolicyLogRow: Identifiable {
   let record: AuditEventRecord
   var id: String { record.id }
   var timestamp: Date { record.timestamp }
-  var target: String { record.targetPath ?? "Unavailable" }
+  var target: String { record.targetPath ?? String(localized: "Unavailable") }
   var response: String { record.kernelResponse }
   var process: String { record.processPreview }
   var decision: String {
-    switch record.policyEvaluations?.first?.decision {
-    case .allow: "Allow"
-    case .deny: "Deny"
-    case .wouldAllow: "Would allow"
-    case .wouldDeny: "Would deny"
-    case nil: "Unavailable"
-    }
+    record.policyEvaluations?.first?.decision.displayName ?? String(localized: "Unavailable")
   }
+}
+
+enum PolicyLogPresentation: Hashable {
+  case programs
+  case events
 }
 
 @Observable
@@ -26,9 +25,18 @@ final class PolicyLogState {
   let key: PolicyAuditLogKey
   var batch = AuditLogBatch(records: [])
   var filterText = ""
+  var isSearching = false
   var selectedEventIDs: Set<String> = []
   var sortOrder = [KeyPathComparator(\PolicyLogRow.timestamp, order: .reverse)]
+  /// Whether someone asked for the inspector. The Log tab shows it once the main window has
+  /// dropped its minimum width; see MainWindowLayout.
+  var wantsInspector = false
+  /// Whether the inspector is shown.
   var showsInspector = false
+  /// Whether the Log tab showing this log is on screen.
+  var isOnScreen = false
+  var presentation = PolicyLogPresentation.programs
+  var selectedProgramIDs: Set<String> = []
   var isLoading = false
   var hasLoaded = false
   var error: String?
@@ -52,15 +60,6 @@ final class PolicyLogState {
   }
 
   var warning: String? {
-    var parts: [String] = []
-    if let warning = batch.warning { parts.append(warning) }
-    if batch.droppedEventCount > 0 {
-      parts.append("\(batch.droppedEventCount) policy records could not be stored during this run.")
-    }
-    if batch.skippedLineCount > 0 {
-      parts.append("\(batch.skippedLineCount) unreadable or unexpected lines were skipped.")
-    }
-    if batch.isTruncated { parts.append("Only the newest 500 stored lines are loaded.") }
-    return parts.isEmpty ? nil : parts.joined(separator: " ")
+    AuditBatchText.limitations(of: batch)
   }
 }

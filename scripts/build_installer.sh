@@ -28,6 +28,8 @@ version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Inf
 extension_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$extension/Contents/Info.plist")
 [ "$version" = "$extension_version" ] || { echo 'App and extension build versions differ.' >&2; exit 1; }
 case "$version" in ''|*[!0-9.]*|.*|*..*|*.) echo 'Invalid build version.' >&2; exit 1;; esac
+short_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")
+case "$short_version" in ''|*[!0-9.]*|.*|*..*|*.) echo 'Invalid app version.' >&2; exit 1;; esac
 /usr/bin/ditto "$helper" "$stage/root/Library/PrivilegedHelperTools/$app_id.maintenance"
 /usr/bin/ditto "$helper" "$stage/scripts/pasu-fs-maintenance"
 /usr/bin/sed "s/com[.]example[.]pasu[.]fs/$app_id/g" "$repo_root/Product/Installer/maintenance.plist" > "$stage/root/Library/LaunchDaemons/$app_id.maintenance.plist"
@@ -37,8 +39,14 @@ case "$version" in ''|*[!0-9.]*|.*|*..*|*.) echo 'Invalid build version.' >&2; e
 /bin/chmod -R go-w "$stage/root"
 /bin/chmod 644 "$stage/root/Library/LaunchDaemons/$app_id.maintenance.plist"
 printf '%s\n' "$version" > "$stage/scripts/build-version"
-/usr/bin/ditto "$repo_root/Product/Installer/Welcome.html" "$stage/resources/Welcome.html"
-/usr/bin/ditto "$repo_root/Product/Installer/Conclusion.html" "$stage/resources/Conclusion.html"
+# Installer shows the pages and messages in the user's language, or English otherwise.
+/usr/bin/ditto "$repo_root/Product/Installer/Resources" "$stage/resources"
+# The welcome page shows the version and build this package installs.
+for page in "$stage"/resources/*.lproj/Welcome.html; do
+  /usr/bin/sed -e "s/@PASU_VERSION@/$short_version/g" -e "s/@PASU_BUILD@/$version/g" "$page" > "$page.tmp"
+  /bin/mv -f "$page.tmp" "$page"
+  if /usr/bin/grep -q '@PASU_' "$page"; then echo "Unfilled placeholder in $page." >&2; exit 1; fi
+done
 /usr/bin/pkgbuild --root "$stage/root" --identifier "$app_id.pkg" --version "$version" \
   --install-location / --ownership recommended --component-plist "$repo_root/Product/Installer/components.plist" \
   --scripts "$stage/scripts" "$stage/Pasu-FS-component.pkg"
@@ -59,11 +67,11 @@ cat > "$stage/Distribution.xml" <<EOF
       try {
         var running = system.applications.fromIdentifier("$app_id");
         if (running.length === 0) return true;
-        my.result.title = "Quit Pasu FS before installing";
-        my.result.message = "Pasu FS is running. Quit it normally, then close and reopen this installer. Protection continues when the app quits; do not use Stop Protection and Quit for an update.";
+        my.result.title = system.localizedString("QUIT_APP_TITLE");
+        my.result.message = system.localizedString("QUIT_APP_MESSAGE");
       } catch (error) {
-        my.result.title = "Unable to check running applications";
-        my.result.message = "Close Pasu FS and reopen this installer. No application files have been changed.";
+        my.result.title = system.localizedString("CHECK_FAILED_TITLE");
+        my.result.message = system.localizedString("CHECK_FAILED_MESSAGE");
       }
       my.result.type = "Fatal";
       return false;

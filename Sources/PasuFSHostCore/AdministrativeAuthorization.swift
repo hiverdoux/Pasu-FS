@@ -4,22 +4,23 @@ import Security
 public enum AdministrativeAuthorizationOperation: String, CaseIterable, Sendable {
   case extensionActivate = "com.example.pasu.fs.extension.activate"
   case extensionDeactivate = "com.example.pasu.fs.extension.deactivate"
-  case policyModify = "com.example.pasu.fs.policy.modify"
-  case compatibilityModify = "com.example.pasu.fs.compatibility.modify"
   case uninstall = "com.example.pasu.fs.uninstall"
 
   public var rightName: String { rawValue }
 
+  /// The sentence macOS shows when it asks for an administrator password.
+  ///
+  /// The sentence is registered as the right's description key. For every language
+  /// folder of the app bundle, the authorization database stores the entry with this
+  /// key from `Localizable.strings`, or the key itself where the table has no entry.
+  /// The key therefore stays English and each translation lives in the app's String
+  /// Catalog.
   public var prompt: String {
     switch self {
     case .extensionActivate:
       "Administrator authentication is required to activate the Pasu FS protection system extension."
     case .extensionDeactivate:
       "Administrator authentication is required to deactivate the Pasu FS protection system extension."
-    case .policyModify:
-      "Administrator authentication is required to modify Pasu FS protection policies from the command line."
-    case .compatibilityModify:
-      "Administrator authentication is required to modify Pasu FS system-compatibility profiles from the command line."
     case .uninstall:
       "Administrator authentication is required to uninstall Pasu FS from this Mac."
     }
@@ -31,10 +32,6 @@ public enum AdministrativeAuthorizationOperation: String, CaseIterable, Sendable
       "Authorizes one Pasu FS system-extension activation request."
     case .extensionDeactivate:
       "Authorizes one Pasu FS system-extension deactivation request."
-    case .policyModify:
-      "Authorizes one command-line Pasu FS policy modification."
-    case .compatibilityModify:
-      "Authorizes one command-line Pasu FS system-compatibility modification."
     case .uninstall:
       "Authorizes one Pasu FS uninstall transaction."
     }
@@ -89,6 +86,7 @@ public enum AdministrativeAuthorizationError: Error, CustomStringConvertible, Se
   case authorizationCreationFailed(OSStatus)
   case rightLookupFailed(name: String, status: OSStatus)
   case rightRegistrationFailed(name: String, status: OSStatus)
+  case rightRemovalFailed(name: String, status: OSStatus)
   case rightDefinitionMismatch(String)
   case canceled
   case denied
@@ -103,16 +101,18 @@ public enum AdministrativeAuthorizationError: Error, CustomStringConvertible, Se
       "Could not read authorization right \(name): \(statusDescription(status))."
     case .rightRegistrationFailed(let name, let status):
       "Could not register authorization right \(name): \(statusDescription(status))."
+    case .rightRemovalFailed(let name, let status):
+      "Could not remove authorization right \(name): \(statusDescription(status))."
     case .rightDefinitionMismatch(let name):
-      "Authorization right \(name) does not require the expected one-time, non-shared administrator authentication. The system-extension request was not submitted."
+      "Authorization right \(name) does not require the expected one-time, non-shared administrator authentication. The request was not submitted."
     case .canceled:
-      "Administrator authentication was canceled. The system-extension request was not submitted."
+      "Administrator authentication was canceled. The request was not submitted."
     case .denied:
-      "Administrator authentication was denied. The system-extension request was not submitted."
+      "Administrator authentication was denied. The request was not submitted."
     case .interactionUnavailable:
-      "Administrator authentication requires an interactive macOS login session. The system-extension request was not submitted."
+      "Administrator authentication requires an interactive macOS login session. The request was not submitted."
     case .authorizationFailed(let status):
-      "Administrator authentication failed: \(statusDescription(status)). The system-extension request was not submitted."
+      "Administrator authentication failed: \(statusDescription(status)). The request was not submitted."
     }
   }
 
@@ -124,12 +124,88 @@ public enum AdministrativeAuthorizationError: Error, CustomStringConvertible, Se
   }
 }
 
-public struct OneShotAdministrativeAuthorizer: Sendable {
-  private enum RightLookup {
+/// Creates, replaces and removes the product's entries in the authorization database.
+///
+/// macOS lets any user add a missing right, but only root or an authenticated
+/// administrator may change or remove an existing one. The installer therefore
+/// registers every right as root after each installation, so the definitions and
+/// prompts always match the installed app, and the maintenance service removes them
+/// as root during uninstall. The app and the command-line tool only add a right that
+/// is still missing.
+public enum AdministrativeAuthorizationRegistry {
+  enum Lookup {
     case found(CFDictionary)
+    case missing
     case failed(OSStatus)
   }
 
+  static func lookup(_ operation: AdministrativeAuthorizationOperation) -> Lookup {
+    var definition: CFDictionary?
+    let status = operation.rightName.withCString {
+      AuthorizationRightGet($0, &definition)
+    }
+    if status == errAuthorizationSuccess, let definition { return .found(definition) }
+    return status == errAuthorizationDenied ? .missing : .failed(status)
+  }
+
+  /// Registers every operation's definition and prompt translations from `bundle`,
+  /// replacing existing entries.
+  public static func register(localizationsFrom bundle: CFBundle) throws {
+    for operation in AdministrativeAuthorizationOperation.allCases {
+      try register(operation, localizationsFrom: bundle)
+    }
+  }
+
+  /// Registers one operation's definition and prompt translations from `bundle`.
+  public static func register(
+    _ operation: AdministrativeAuthorizationOperation, localizationsFrom bundle: CFBundle
+  ) throws {
+    let authorization = try freshAuthorization()
+    defer { AuthorizationFree(authorization, .destroyRights) }
+    let definition = AdministrativeAuthorizationRule.definition(for: operation) as CFDictionary
+    let status = operation.rightName.withCString {
+      AuthorizationRightSet(
+        authorization, $0, definition, operation.prompt as CFString, bundle,
+        "Localizable" as CFString)
+    }
+    guard status == errAuthorizationSuccess else {
+      throw AdministrativeAuthorizationError.rightRegistrationFailed(
+        name: operation.rightName, status: status)
+    }
+  }
+
+  /// Removes every operation's entry. Entries that do not exist are skipped.
+  public static func remove() throws {
+    for operation in AdministrativeAuthorizationOperation.allCases {
+      switch lookup(operation) {
+      case .missing:
+        continue
+      case .failed(let status):
+        throw AdministrativeAuthorizationError.rightLookupFailed(
+          name: operation.rightName, status: status)
+      case .found:
+        let authorization = try freshAuthorization()
+        defer { AuthorizationFree(authorization, .destroyRights) }
+        let status = operation.rightName.withCString { AuthorizationRightRemove(authorization, $0) }
+        guard status == errAuthorizationSuccess else {
+          throw AdministrativeAuthorizationError.rightRemovalFailed(
+            name: operation.rightName, status: status)
+        }
+      }
+    }
+  }
+
+  static func freshAuthorization() throws -> AuthorizationRef {
+    var authorization: AuthorizationRef?
+    let status = AuthorizationCreate(nil, nil, [], &authorization)
+    guard status == errAuthorizationSuccess, let authorization else {
+      throw AdministrativeAuthorizationError.authorizationCreationFailed(status)
+    }
+    return authorization
+  }
+}
+
+public struct OneShotAdministrativeAuthorizer: Sendable {
   public init() {}
 
   /// Transfer a fresh GUI-session reference; the helper performs the actual one-shot authorization.
@@ -140,11 +216,7 @@ public struct OneShotAdministrativeAuthorizer: Sendable {
     submitting body: @MainActor (Data) async throws -> T
   ) async throws -> T {
     try ensureRight(operation)
-    var reference: AuthorizationRef?
-    let status = AuthorizationCreate(nil, nil, [], &reference)
-    guard status == errAuthorizationSuccess, let reference else {
-      throw AdministrativeAuthorizationError.authorizationCreationFailed(status)
-    }
+    let reference = try AdministrativeAuthorizationRegistry.freshAuthorization()
     defer { AuthorizationFree(reference, .destroyRights) }
     var external = AuthorizationExternalForm()
     let exportStatus = AuthorizationMakeExternalForm(reference, &external)
@@ -162,81 +234,33 @@ public struct OneShotAdministrativeAuthorizer: Sendable {
     submitting body: () throws -> T
   ) throws -> T {
     try ensureRight(operation)
-
-    var authorization: AuthorizationRef?
-    let createStatus = AuthorizationCreate(
-      nil,
-      nil,
-      [],
-      &authorization
-    )
-    guard createStatus == errAuthorizationSuccess, let authorization else {
-      throw AdministrativeAuthorizationError.authorizationCreationFailed(createStatus)
-    }
+    let authorization = try AdministrativeAuthorizationRegistry.freshAuthorization()
     defer {
       AuthorizationFree(authorization, .destroyRights)
     }
-
     try request(operation, authorization: authorization)
     return try body()
   }
 
+  /// A missing right is added with the prompts of this process's bundle. An existing
+  /// right is used as it is, because changing it would need a separate administrator
+  /// authentication; the installer refreshes existing rights as root.
   private func ensureRight(_ operation: AdministrativeAuthorizationOperation) throws {
-    let lookup = rightDefinition(named: operation.rightName)
-    switch lookup {
+    switch AdministrativeAuthorizationRegistry.lookup(operation) {
     case .found(let definition):
       guard AdministrativeAuthorizationRule.isSecure(definition) else {
         throw AdministrativeAuthorizationError.rightDefinitionMismatch(operation.rightName)
       }
-    case .failed(let status) where status == errAuthorizationDenied:
-      try registerRight(operation)
-      guard case .found(let definition) = rightDefinition(named: operation.rightName),
+    case .missing:
+      try AdministrativeAuthorizationRegistry.register(
+        operation, localizationsFrom: CFBundleGetMainBundle())
+      guard case .found(let definition) = AdministrativeAuthorizationRegistry.lookup(operation),
         AdministrativeAuthorizationRule.isSecure(definition)
       else {
         throw AdministrativeAuthorizationError.rightDefinitionMismatch(operation.rightName)
       }
     case .failed(let status):
       throw AdministrativeAuthorizationError.rightLookupFailed(
-        name: operation.rightName,
-        status: status
-      )
-    }
-  }
-
-  private func rightDefinition(named name: String) -> RightLookup {
-    var definition: CFDictionary?
-    let status = name.withCString {
-      AuthorizationRightGet($0, &definition)
-    }
-    guard status == errAuthorizationSuccess, let definition else {
-      return .failed(status)
-    }
-    return .found(definition)
-  }
-
-  private func registerRight(_ operation: AdministrativeAuthorizationOperation) throws {
-    var authorization: AuthorizationRef?
-    let createStatus = AuthorizationCreate(nil, nil, [], &authorization)
-    guard createStatus == errAuthorizationSuccess, let authorization else {
-      throw AdministrativeAuthorizationError.authorizationCreationFailed(createStatus)
-    }
-    defer {
-      AuthorizationFree(authorization, .destroyRights)
-    }
-
-    let definition = AdministrativeAuthorizationRule.definition(for: operation) as CFDictionary
-    let status = operation.rightName.withCString {
-      AuthorizationRightSet(
-        authorization,
-        $0,
-        definition,
-        operation.prompt as CFString,
-        nil,
-        nil
-      )
-    }
-    guard status == errAuthorizationSuccess else {
-      throw AdministrativeAuthorizationError.rightRegistrationFailed(
         name: operation.rightName,
         status: status
       )

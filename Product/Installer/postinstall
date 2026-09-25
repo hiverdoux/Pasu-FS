@@ -6,6 +6,7 @@ export PATH
 helper=/Library/PrivilegedHelperTools/com.example.pasu.fs.maintenance
 daemon=/Library/LaunchDaemons/com.example.pasu.fs.maintenance.plist
 "$helper" --verify-installed
+"$helper" --register-authorization-rights
 if /bin/launchctl print system/com.example.pasu.fs.maintenance >/dev/null 2>&1; then
   /bin/launchctl bootout system/com.example.pasu.fs.maintenance
 fi

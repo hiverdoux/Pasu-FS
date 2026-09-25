@@ -3,47 +3,69 @@ import SwiftUI
 struct UninstallView: View {
   @Bindable var model: AppModel
   @Environment(\.dismiss) private var dismiss
-  @State private var removeData = false
+  @State private var removeData: Bool
+
+  init(model: AppModel) {
+    self.model = model
+    // A removal deferred until after a restart keeps the choice made before the restart,
+    // so the switch shows that choice from the moment the sheet appears.
+    _removeData = State(initialValue: model.pendingUninstall?.removeData ?? false)
+  }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 16) {
-      Text(model.pendingUninstall == nil ? "Uninstall Pasu FS?" : "Finish uninstalling Pasu FS")
-        .font(.title2.weight(.semibold))
-      Text(
-        "This removes Pasu FS from this Mac and stops its protection. macOS may ask for administrator approval or a restart. Your protected folders and their files will not be deleted."
-      )
-      Toggle("Also delete Pasu FS settings and audit records", isOn: $removeData)
-        .disabled(model.isUninstalling || model.isFinalizingUninstall)
-      Text(
-        "Leave this off to keep your protection rules, compatibility settings, and audit records for a future installation."
-      )
-      .font(.callout)
-      .foregroundStyle(.secondary)
-      if model.hasUnsavedPolicyChanges {
-        Text("Unsaved policy changes will be discarded when Pasu FS quits.")
-          .foregroundStyle(.orange)
+    Form {
+      Section {
+        Text("Protected folders and their files are not deleted.")
+        Toggle("Also delete Pasu FS settings and logs", isOn: $removeData)
+          .disabled(model.isUninstalling || model.isFinalizingUninstall)
+        if model.hasUnsavedPolicyChanges {
+          WarningLabel(
+            text: String(
+              localized: "Unsaved policy changes will be discarded when Pasu FS quits."))
+        }
+      } header: {
+        SheetTitle(title: title)
       }
-      if let error = model.uninstallStateError ?? model.pendingUninstall?.failure {
-        Text(error).foregroundStyle(.red).textSelection(.enabled)
-        Text(
-          "If the app or maintenance service is damaged, quit Pasu FS and reinstall the same or a newer PKG, then retry uninstalling."
-        )
-        .font(.callout)
+      if let error = model.uninstallStateError ?? model.pendingUninstallFailureMessage {
+        Section {
+          Text(error)
+            .foregroundStyle(.red)
+            .textSelection(.enabled)
+          Text("If this keeps failing, reinstall the same or a newer package and try again.")
+        }
       }
       if let error = model.lastError {
-        Text(error).foregroundStyle(.red).textSelection(.enabled)
+        Section {
+          Text(error)
+            .foregroundStyle(.red)
+            .textSelection(.enabled)
+        }
       }
-      if let message = model.operationMessage {
-        Text(message).font(.callout).textSelection(.enabled)
+      if model.isUninstalling || model.operationMessage != nil {
+        Section {
+          HStack {
+            if model.isUninstalling {
+              ProgressView()
+                .controlSize(.small)
+            }
+            if let message = model.operationMessage {
+              Text(message)
+                .textSelection(.enabled)
+            }
+          }
+        }
       }
-      HStack {
-        if model.isUninstalling { ProgressView().controlSize(.small) }
-        Spacer()
+    }
+    .formStyle(.grouped)
+    .toolbar {
+      ToolbarItem(placement: .cancellationAction) {
         Button("Cancel") { dismiss() }
-          .keyboardShortcut(.cancelAction)
           .disabled(model.isUninstalling || model.isFinalizingUninstall)
+      }
+      ToolbarItem(placement: .destructiveAction) {
         Button(
-          model.pendingUninstall == nil ? "Uninstall" : "Continue Uninstall", role: .destructive
+          model.pendingUninstall == nil ? "Uninstall" : "Continue Uninstalling",
+          role: .destructive
         ) {
           Task {
             if await model.uninstall(removeData: removeData) {
@@ -56,13 +78,16 @@ struct UninstallView: View {
         .disabled(model.isBusy || model.isUninstalling || model.isFinalizingUninstall)
       }
     }
-    .padding(24)
-    .frame(width: 520)
+    .formSheetSizing()
     .interactiveDismissDisabled(model.isUninstalling)
     .onAppear {
-      removeData = model.pendingUninstall?.removeData ?? false
       model.lastError = nil
       model.operationMessage = nil
     }
+  }
+
+  private var title: String {
+    model.pendingUninstall == nil
+      ? String(localized: "Uninstall Pasu FS?") : String(localized: "Finish Uninstalling Pasu FS")
   }
 }

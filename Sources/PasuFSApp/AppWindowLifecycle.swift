@@ -4,7 +4,12 @@ import SwiftUI
 @MainActor
 final class AppWindowLifecycle: NSObject, NSApplicationDelegate {
   private weak var mainWindow: NSWindow?
+  private var auxiliaryWindows: [ObjectIdentifier: WeakWindow] = [:]
   private var openMainWindow: (() -> Void)?
+
+  private struct WeakWindow {
+    weak var window: NSWindow?
+  }
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
     false
@@ -31,13 +36,22 @@ final class AppWindowLifecycle: NSObject, NSApplicationDelegate {
   func observe(_ window: NSWindow, openMainWindow: @escaping () -> Void) {
     self.openMainWindow = openMainWindow
     guard mainWindow !== window else { return }
-    NotificationCenter.default.removeObserver(
-      self, name: NSWindow.didBecomeKeyNotification, object: mainWindow
-    )
-    NotificationCenter.default.removeObserver(
-      self, name: NSWindow.willCloseNotification, object: mainWindow
-    )
+    stopObserving(mainWindow)
     mainWindow = window
+    startObserving(window)
+    prepareToOpenWindow()
+  }
+
+  /// Windows such as Settings keep the app in the Dock while they are open.
+  func observeAuxiliary(_ window: NSWindow) {
+    let key = ObjectIdentifier(window)
+    guard auxiliaryWindows[key]?.window !== window else { return }
+    auxiliaryWindows[key] = WeakWindow(window: window)
+    startObserving(window)
+    prepareToOpenWindow()
+  }
+
+  private func startObserving(_ window: NSWindow) {
     NotificationCenter.default.addObserver(
       self,
       selector: #selector(windowDidBecomeKey(_:)),
@@ -50,7 +64,16 @@ final class AppWindowLifecycle: NSObject, NSApplicationDelegate {
       name: NSWindow.willCloseNotification,
       object: window
     )
-    prepareToOpenWindow()
+  }
+
+  private func stopObserving(_ window: NSWindow?) {
+    guard let window else { return }
+    NotificationCenter.default.removeObserver(
+      self, name: NSWindow.didBecomeKeyNotification, object: window
+    )
+    NotificationCenter.default.removeObserver(
+      self, name: NSWindow.willCloseNotification, object: window
+    )
   }
 
   @objc private func windowDidBecomeKey(_ notification: Notification) {
@@ -58,14 +81,19 @@ final class AppWindowLifecycle: NSObject, NSApplicationDelegate {
   }
 
   @objc private func windowWillClose(_ notification: Notification) {
-    guard let window = notification.object as? NSWindow else { return }
     // Let AppKit finish closing before removing the app from the Dock.
-    Task { @MainActor [weak self, window] in
-      guard let self, self.mainWindow === window, !window.isVisible else {
-        return
-      }
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      auxiliaryWindows = auxiliaryWindows.filter { Self.isOpen($0.value.window) }
+      guard !Self.isOpen(mainWindow), auxiliaryWindows.isEmpty else { return }
       NSApplication.shared.setActivationPolicy(.accessory)
     }
+  }
+
+  /// A minimized window still counts as open, so the app keeps its Dock item.
+  private static func isOpen(_ window: NSWindow?) -> Bool {
+    guard let window else { return false }
+    return window.isVisible || window.isMiniaturized
   }
 }
 
@@ -84,6 +112,24 @@ struct MainWindowObserver: NSViewRepresentable {
   func updateNSView(_ nsView: MainWindowObservationView, context: Context) {
     if let window = nsView.window {
       lifecycle.observe(window) { [openWindow] in openWindow(id: "main") }
+    }
+  }
+}
+
+struct AuxiliaryWindowObserver: NSViewRepresentable {
+  let lifecycle: AppWindowLifecycle
+
+  func makeNSView(context: Context) -> MainWindowObservationView {
+    let view = MainWindowObservationView()
+    view.onWindowAvailable = { [weak lifecycle] window in
+      lifecycle?.observeAuxiliary(window)
+    }
+    return view
+  }
+
+  func updateNSView(_ nsView: MainWindowObservationView, context: Context) {
+    if let window = nsView.window {
+      lifecycle.observeAuxiliary(window)
     }
   }
 }

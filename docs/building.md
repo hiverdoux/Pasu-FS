@@ -86,7 +86,8 @@ Put your profiles in `.local/signing/` and edit `.local/development-signing.json
 
 Replace the sample identifier and filenames. Relative profile paths are resolved
 from the repository root. Absolute paths are also accepted in this local file.
-`PASU_FS_SIGNING_CONFIG` can select a different local JSON configuration.
+`PASU_FS_SIGNING_CONFIG` can select a different local JSON configuration; a
+relative value is also resolved from the repository root.
 
 The builder substitutes the app identifier consistently into a temporary copy of
 the product sources, property lists, services, authorization rights and installer.
@@ -119,14 +120,20 @@ Successful output consists of:
 
 The product step compiles the app, command-line launcher, system extension and
 maintenance service, embeds the profiles, signs each component and verifies the
-signatures. The installer includes the app and system maintenance service.
+signatures. It also compiles the String Catalogs in `Product/Localization/` into
+the English and Korean resources of the app and extension with Xcode's
+`xcstringstool`. Each executable records the macOS SDK version of the build Mac;
+macOS uses that record to draw the app with the current system design, and the
+build stops if an executable records a different SDK. The installer includes the
+app and system maintenance service.
 The PKG itself is unsigned. Keychain may ask you to authorize use of the private key.
 
 The numeric build number increases automatically using `.local/build-sequence.json`.
-The same number is used in the app, extension and package. Failed builds consume
-an issued number so a later build cannot accidentally reuse it. Its issue timestamp
-uses the build process's current system time zone, including the UTC offset.
-Keep this local
+It is never lower than the `CFBundleVersion` in the product Info.plist templates
+under `Product/`, so the first build on a new Mac starts from that value. The same
+number is used in the app, extension and package. Failed builds consume an issued
+number so a later build cannot accidentally reuse it. Its issue timestamp uses the
+build process's current system time zone, including the UTC offset. Keep this local
 record when changing branches or restoring older source. To start on a new build
 Mac when an installed product has a higher number, choose a greater number explicitly:
 
@@ -134,7 +141,8 @@ Mac when an installed product has a higher number, choose a greater number expli
 ./scripts/build_installer.sh --build-number 100
 ```
 
-Use a number greater than every build already issued for your installation.
+Use a number greater than every build already issued for your installation and
+at least the template's `CFBundleVersion`.
 The displayed version comes from the product Info.plist templates; keep the app
 and extension display versions equal when preparing a new version.
 
@@ -148,6 +156,31 @@ For only the application ZIP, run `./scripts/build_product.sh`. Installing an
 app from that ZIP alone does not install the maintenance service. Use the PKG for
 normal installation and updates.
 
+## Translations
+
+The app follows the macOS language setting and supports English and Korean.
+Source code contains the English text. Translations are kept in these files:
+
+- `Product/Localization/App/Localizable.xcstrings` for the app's text. Some
+  English entries also define plural forms.
+- `Product/Localization/*/InfoPlist.xcstrings` for text macOS shows from the app
+  and extension property lists.
+- `Product/Installer/Resources/<language>.lproj/` for the installer pages and
+  messages. Each `Welcome.html` keeps the `@PASU_VERSION@` and `@PASU_BUILD@`
+  placeholders, which the installer build replaces with the version and build
+  number of the package.
+
+A String Catalog (`.xcstrings`) is a JSON file that Xcode can edit. After changing
+user-facing text, run `./scripts/check_source.sh`. Its localization check lists
+text without a Korean translation, catalog entries the app no longer uses and
+installer files or messages missing in a language. The three administrator
+password prompts that macOS shows for Pasu FS operations are catalog entries with
+a manual extraction state: macOS reads them from the installed app when the
+installer registers the operations, so the check does not expect them in the
+app's source code. Messages from the system
+extension and the command-line tools are in English; the app shows known extension
+messages in the selected language.
+
 ## Troubleshooting
 
 | Error | Action |
@@ -156,8 +189,13 @@ normal installation and updates.
 | Profile App ID mismatch | Use profiles for the exact app identifier and its `.endpointsecurity` extension. |
 | Expired profile or missing entitlement | Renew the profile with the required capability and registered test devices. |
 | No matching signing identity | Import the certificate into Keychain with its private key, or select the right certificate fingerprint. |
-| Build number rejected | Use a number greater than the locally recorded number and installed build. |
+| Build number rejected | Use a number greater than the locally recorded number and installed build, and at least the template's `CFBundleVersion`. |
 | Compilation or SDK error | Confirm the selected Xcode includes a Swift 6 toolchain and macOS SDK. |
+| `records SDK … instead of …` | Select a full Xcode with `DEVELOPER_DIR` so the compiler, linker and SDK come from the same toolchain. |
+| `Missing compiled localization` | The catalogs compiled to no Korean file or no English plural file at all: `Localizable.xcstrings` needs at least one Korean translation and one English plural variation, and each `InfoPlist.xcstrings` at least one Korean translation. Individual missing entries are reported by `./scripts/check_source.sh` instead. |
+| `Invalid app version` | Keep `CFBundleShortVersionString` in the Info.plist templates numeric, with dots only. |
+| `Unfilled placeholder` | Keep `@PASU_VERSION@` and `@PASU_BUILD@` in every installer `Welcome.html`. |
+| `xcstringstool` not found | Select a full Xcode installation with `DEVELOPER_DIR`; the Command Line Tools alone do not include it. |
 | Signature succeeds but app cannot run | Confirm the device is registered, profiles are valid, and macOS allows development-signed software on that device. |
 
 See [installation and verification](installation.md) for system-extension and
@@ -173,3 +211,8 @@ handling without activating the extension, run:
 
 This check requires an already installed or extracted app. It does not replace the
 installation, permission and file-access checks in the installation guide.
+
+The optional capability probe described in the README runs from the repository
+root with `swift run es-capability-probe`. It prints the result of creating an
+Endpoint Security client and exits with status 0 for the expected outcomes of an
+unsigned build, such as a missing entitlement or permission.
