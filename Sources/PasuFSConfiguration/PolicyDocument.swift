@@ -97,7 +97,8 @@ public struct PolicyRule: Codable, Equatable, Hashable, Identifiable, Sendable {
     }
   }
 
-  fileprivate var identityKey: String {
+  /// The program identity a rule names, independent of its ID and settings.
+  var identityKey: String {
     switch kind {
     case .teamSigned:
       "team:\((teamIdentifier ?? "").uppercased()):\(signingIdentifier)"
@@ -107,53 +108,133 @@ public struct PolicyRule: Codable, Equatable, Hashable, Identifiable, Sendable {
   }
 }
 
+/// A system-compatibility profile turned on for one policy, with the authorization digest the
+/// profile had in the built-in catalog when the change was saved. A later catalog that changes
+/// what the profile allows gives it another digest; the profile then stays inactive until it is
+/// turned on again, which is a change an administrator authorizes.
+public struct PolicySystemCompatibilityProfile: Codable, Equatable, Hashable, Sendable {
+  public var profileIdentifier: String
+  public var authorizationDigest: String
+
+  public init(profileIdentifier: String, authorizationDigest: String) {
+    self.profileIdentifier = profileIdentifier
+    self.authorizationDigest = authorizationDigest
+  }
+}
+
 public struct DirectoryPolicy: Codable, Equatable, Identifiable, Sendable {
   public var id: UUID
   public var name: String
   public var mode: PolicyMode
-  public var policyType: PolicyType
+  public var isBlacklistEnabled: Bool
   public var protectedRootPath: String
-  public var rules: [PolicyRule]
+  public var allowRules: [PolicyRule]
+  public var denyRules: [PolicyRule]
+  /// The system-compatibility profiles turned on for this policy. Each lets the named Apple
+  /// system processes make the profile's requests in this folder without an observed
+  /// execution history or a matching allow rule; see `ResolvedSystemCompatibilityProfile`.
+  /// Stored only when the list is not empty, so a policy without profiles encodes as before.
+  public var systemCompatibilityProfiles: [PolicySystemCompatibilityProfile]
+
+  /// Compatibility accessors for clients that edit one list at a time.
+  /// Changing the mode never moves or deletes either list.
+  public var policyType: PolicyType {
+    get { isBlacklistEnabled ? .blacklist : .whitelist }
+    set { isBlacklistEnabled = newValue == .blacklist }
+  }
+
+  public var rules: [PolicyRule] {
+    get { isBlacklistEnabled ? denyRules : allowRules }
+    set {
+      if isBlacklistEnabled { denyRules = newValue } else { allowRules = newValue }
+    }
+  }
 
   public init(
-    id: UUID = UUID(),
-    name: String,
-    mode: PolicyMode,
-    policyType: PolicyType,
-    protectedRootPath: String,
-    rules: [PolicyRule]
+    id: UUID = UUID(), name: String, mode: PolicyMode,
+    isBlacklistEnabled: Bool = false, protectedRootPath: String,
+    allowRules: [PolicyRule] = [], denyRules: [PolicyRule] = [],
+    systemCompatibilityProfiles: [PolicySystemCompatibilityProfile] = []
   ) {
     self.id = id
     self.name = name
     self.mode = mode
-    self.policyType = policyType
+    self.isBlacklistEnabled = isBlacklistEnabled
     self.protectedRootPath = protectedRootPath
-    self.rules = rules
+    self.allowRules = allowRules
+    self.denyRules = denyRules
+    self.systemCompatibilityProfiles = systemCompatibilityProfiles
   }
 
-  public var activeRuleCount: Int {
-    rules.lazy.filter(\.isEnabled).count
+  private enum CodingKeys: String, CodingKey {
+    case id, name, mode, isBlacklistEnabled, protectedRootPath, allowRules, denyRules
+    case systemCompatibilityProfiles
   }
+
+  public init(from decoder: any Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(UUID.self, forKey: .id)
+    name = try container.decode(String.self, forKey: .name)
+    mode = try container.decode(PolicyMode.self, forKey: .mode)
+    isBlacklistEnabled = try container.decode(Bool.self, forKey: .isBlacklistEnabled)
+    protectedRootPath = try container.decode(String.self, forKey: .protectedRootPath)
+    allowRules = try container.decode([PolicyRule].self, forKey: .allowRules)
+    denyRules = try container.decode([PolicyRule].self, forKey: .denyRules)
+    systemCompatibilityProfiles =
+      try container.decodeIfPresent(
+        [PolicySystemCompatibilityProfile].self, forKey: .systemCompatibilityProfiles) ?? []
+  }
+
+  public func encode(to encoder: any Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(id, forKey: .id)
+    try container.encode(name, forKey: .name)
+    try container.encode(mode, forKey: .mode)
+    try container.encode(isBlacklistEnabled, forKey: .isBlacklistEnabled)
+    try container.encode(protectedRootPath, forKey: .protectedRootPath)
+    try container.encode(allowRules, forKey: .allowRules)
+    try container.encode(denyRules, forKey: .denyRules)
+    if !systemCompatibilityProfiles.isEmpty {
+      try container.encode(systemCompatibilityProfiles, forKey: .systemCompatibilityProfiles)
+    }
+  }
+
+  public init(
+    id: UUID = UUID(), name: String, mode: PolicyMode, policyType: PolicyType,
+    protectedRootPath: String, rules: [PolicyRule]
+  ) {
+    self.init(
+      id: id, name: name, mode: mode, isBlacklistEnabled: policyType == .blacklist,
+      protectedRootPath: protectedRootPath,
+      allowRules: policyType == .whitelist ? rules : [],
+      denyRules: policyType == .blacklist ? rules : [])
+  }
+
+  public var activeRuleCount: Int { rules.lazy.filter(\.isEnabled).count }
 
   public func policySnapshot() throws -> PolicySnapshot {
     PolicySnapshot(rules: try rules.filter(\.isEnabled).map { try $0.matcherRule() })
   }
 
-  private enum CodingKeys: String, CodingKey {
-    case id
-    case name
-    case mode
-    case policyType = "type"
-    case protectedRootPath
-    case rules
+  public func executionOriginSnapshot() throws -> ExecutionOriginPolicySnapshot {
+    ExecutionOriginPolicySnapshot(
+      isBlacklistEnabled: isBlacklistEnabled,
+      allowRules: try allowRules.filter(\.isEnabled).map { try $0.matcherRule() },
+      denyRules: try denyRules.filter(\.isEnabled).map { try $0.matcherRule() })
   }
+
 }
 
 public struct PolicySetDocument: Codable, Equatable, Sendable {
-  public static let currentSchemaVersion = 2
+  /// Schema 5 sets can turn compatibility profiles on for a policy. A schema 4 set is read as
+  /// it is, including any profiles it names; see `PolicySetDocumentCodec.migrateStoredDocument`.
+  public static let currentSchemaVersion = 5
+  /// The first schema whose descendant options take effect. Earlier sets turn them off when read.
+  public static let firstSchemaVersionWithDescendantAccess = 4
   public static let maximumPolicyCount = 64
   public static let maximumRuleCount = 1_024
   public static let maximumPolicyNameLength = 80
+  public static let maximumCompatibilityProfilesPerPolicy = 16
 
   public var schemaVersion: Int
   public var setIdentifier: UUID
@@ -183,7 +264,7 @@ public struct PolicySetDocument: Codable, Equatable, Sendable {
       throw PolicyValidationError.tooManyPolicies(policies.count)
     }
 
-    let totalRuleCount = policies.reduce(into: 0) { $0 += $1.rules.count }
+    let totalRuleCount = policies.reduce(into: 0) { $0 += $1.allowRules.count + $1.denyRules.count }
     guard totalRuleCount <= Self.maximumRuleCount else {
       throw PolicyValidationError.tooManyRules(totalRuleCount)
     }
@@ -229,6 +310,7 @@ public struct PolicySetDocument: Codable, Equatable, Sendable {
       }
 
       try Self.validateRules(in: policy)
+      try Self.validateCompatibilityProfiles(in: policy)
     }
   }
 
@@ -244,7 +326,9 @@ public struct PolicySetDocument: Codable, Equatable, Sendable {
     var ruleIDs = Set<String>()
     var identities = Set<String>()
 
-    for rule in policy.rules {
+    for (list, rule) in policy.allowRules.map({ ("allow", $0) })
+      + policy.denyRules.map({ ("deny", $0) })
+    {
       try validateIdentifier(rule.id, field: "rule id")
       try validateIdentifier(rule.signingIdentifier, field: "signing identifier")
 
@@ -266,11 +350,33 @@ public struct PolicySetDocument: Codable, Equatable, Sendable {
           ruleID: rule.id
         )
       }
-      guard identities.insert(rule.identityKey).inserted else {
+      guard identities.insert("\(list):\(rule.identityKey)").inserted else {
         throw PolicyValidationError.duplicateIdentity(
           policy: policy.name,
           identity: rule.identityKey
         )
+      }
+    }
+  }
+
+  /// The catalog is not consulted: a profile the running catalog no longer has, or whose
+  /// digest changed, is kept but stays inactive.
+  private static func validateCompatibilityProfiles(in policy: DirectoryPolicy) throws {
+    let profiles = policy.systemCompatibilityProfiles
+    guard profiles.count <= maximumCompatibilityProfilesPerPolicy else {
+      throw PolicyValidationError.tooManyCompatibilityProfiles(
+        policy: policy.name, count: profiles.count)
+    }
+    var identifiers = Set<String>()
+    for profile in profiles {
+      try validateIdentifier(profile.profileIdentifier, field: "compatibility profile identifier")
+      guard SystemCompatibilityDigest.isCanonicalSHA256(profile.authorizationDigest) else {
+        throw PolicyValidationError.invalidCompatibilityProfileDigest(
+          policy: policy.name, profile: profile.profileIdentifier)
+      }
+      guard identifiers.insert(profile.profileIdentifier).inserted else {
+        throw PolicyValidationError.duplicateCompatibilityProfile(
+          policy: policy.name, profile: profile.profileIdentifier)
       }
     }
   }
@@ -300,6 +406,9 @@ public enum PolicyValidationError: Error, Equatable, CustomStringConvertible, Se
   case teamIdentifierForbidden(String)
   case duplicateRuleID(policy: String, ruleID: String)
   case duplicateIdentity(policy: String, identity: String)
+  case tooManyCompatibilityProfiles(policy: String, count: Int)
+  case invalidCompatibilityProfileDigest(policy: String, profile: String)
+  case duplicateCompatibilityProfile(policy: String, profile: String)
 
   public var description: String {
     switch self {
@@ -331,6 +440,12 @@ public enum PolicyValidationError: Error, Equatable, CustomStringConvertible, Se
       "Policy \(policy) contains duplicate rule ID: \(ruleID)."
     case .duplicateIdentity(let policy, let identity):
       "Policy \(policy) contains duplicate program identity: \(identity)."
+    case .tooManyCompatibilityProfiles(let policy, let count):
+      "Policy \(policy) turns on too many compatibility profiles: \(count)."
+    case .invalidCompatibilityProfileDigest(let policy, let profile):
+      "Policy \(policy) has an invalid authorization digest for compatibility profile \(profile)."
+    case .duplicateCompatibilityProfile(let policy, let profile):
+      "Policy \(policy) turns on compatibility profile \(profile) more than once."
     }
   }
 }

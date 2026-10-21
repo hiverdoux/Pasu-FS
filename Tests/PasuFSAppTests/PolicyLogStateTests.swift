@@ -7,6 +7,35 @@ import XCTest
 
 @MainActor
 final class PolicyLogStateTests: XCTestCase {
+  func testNoticesKeepEachCurrentIssueAndPrioritizeRefreshFailure() {
+    let state = PolicyLogState(key: .init(setIdentifier: UUID(), policyIdentifier: UUID()))
+    state.hasLoaded = true
+    state.error = "Connection lost"
+    state.batch = AuditLogBatch(
+      records: [], skippedLineCount: 7, droppedEventCount: 12, isTruncated: true,
+      warning: "Storage warning")
+
+    XCTAssertEqual(state.notices.map(\.id), ["load", "runtime", "dropped", "unreadable"])
+    XCTAssertEqual(state.notices.first?.severity, .error)
+    XCTAssertTrue(state.notices.first?.message.contains("records loaded earlier") == true)
+    XCTAssertEqual(state.notices.filter { $0.severity == .warning }.count, 3)
+
+    state.error = nil
+    XCTAssertEqual(state.notices.map(\.id), ["runtime", "dropped", "unreadable"])
+    state.batch = AuditLogBatch(records: [], isTruncated: true)
+    XCTAssertTrue(state.notices.isEmpty)
+  }
+
+  func testInitialFailureAndEmptyMessagesDoNotInventWarnings() {
+    let state = PolicyLogState(key: .init(setIdentifier: UUID(), policyIdentifier: UUID()))
+    state.error = "Unavailable"
+    XCTAssertTrue(state.notices.first?.message.contains("could not be loaded") == true)
+    XCTAssertFalse(state.notices.first?.message.contains("records loaded earlier") == true)
+    state.error = "  "
+    state.batch.warning = "\n"
+    XCTAssertTrue(state.notices.isEmpty)
+  }
+
   func testQueriesAndUIStateStayWithTheirPolicyDuringNavigation() async throws {
     let document = policies()
     let runtime = PolicyLogRuntime()
@@ -183,18 +212,13 @@ private actor PolicyLogRuntime: ExtensionRuntimeControlling {
     replies[index] = nil
   }
 
-  func applyPolicySet(_ document: PolicySetDocument) async throws -> PolicyApplyReceipt {
+  func applyPolicySet(
+    _ document: PolicySetDocument, authorization: Data?, savedPolicyIdentifier: UUID?
+  ) async throws -> PolicyApplyReceipt {
     throw Failure.unused
   }
   func queryStatus() async throws -> ExtensionStatusSnapshot { throw Failure.unused }
   func queryPolicySet() async throws -> PolicySetDocument { throw Failure.unused }
-  func applySystemCompatibilitySettings(_ document: SystemCompatibilitySettingsDocument)
-    async throws
-    -> SystemCompatibilitySettingsApplyReceipt
-  { throw Failure.unused }
-  func querySystemCompatibilityState() async throws -> SystemCompatibilityStateSnapshot {
-    throw Failure.unused
-  }
   func readAuditLog(maximumLineCount: Int) async throws -> AuditLogBatch { throw Failure.unused }
   func invalidate() {}
   private enum Failure: Error { case unused }

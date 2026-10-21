@@ -1,30 +1,6 @@
 import Foundation
 import PasuFSHostCore
-
-struct BundleBuildVersion: Comparable, Equatable {
-  private let components: [UInt64]
-
-  init?(_ rawValue: String) {
-    let rawComponents = rawValue.split(separator: ".", omittingEmptySubsequences: false)
-    guard (1...3).contains(rawComponents.count) else { return nil }
-
-    var parsedComponents: [UInt64] = []
-    for rawComponent in rawComponents {
-      guard !rawComponent.isEmpty,
-        rawComponent.allSatisfy({ $0.isASCII && $0.isNumber }),
-        let component = UInt64(rawComponent)
-      else {
-        return nil
-      }
-      parsedComponents.append(component)
-    }
-    components = parsedComponents + Array(repeating: 0, count: 3 - parsedComponents.count)
-  }
-
-  static func < (lhs: Self, rhs: Self) -> Bool {
-    lhs.components.lexicographicallyPrecedes(rhs.components)
-  }
-}
+import PasuFSMaintenanceCore
 
 enum ExtensionUpdatePlanner {
   static func shouldRequestActivation(
@@ -94,6 +70,28 @@ struct AutomaticExtensionUpdateCheck {
   }
 }
 
+/// Remembers the boot session in which a running extension was replaced. The new extension has
+/// not observed the programs started before it, so policies deny them until they start again.
+/// A restart ends the boot session and with it the recommendation. Only a running extension
+/// without `NSEndpointSecurityRebootRequired`, from 0.10.3 or earlier, is replaced at once; macOS
+/// defers replacing one with the key to the next restart.
+struct ExtensionReplacementRecord {
+  static let defaultsKey = "ExtensionReplacedBootSession"
+
+  var defaults: UserDefaults = .standard
+  var currentBootSession: () -> String? = BootSession.identifier
+
+  var recommendsRestart: Bool {
+    guard let current = currentBootSession() else { return false }
+    return defaults.string(forKey: Self.defaultsKey) == current
+  }
+
+  func recordReplacement() {
+    guard let current = currentBootSession() else { return }
+    defaults.set(current, forKey: Self.defaultsKey)
+  }
+}
+
 protocol EmbeddedSystemExtensionVersionProviding: Sendable {
   func buildVersion(in hostBundleURL: URL) -> String?
 }
@@ -125,13 +123,20 @@ enum StopProtectionQuitOutcome: Equatable {
 }
 
 enum StopProtectionQuitPolicy {
+  /// - Parameter extensionStopsAtRestart: Whether the extension still answers while macOS
+  ///   removes every version it reports at the next restart.
   static func outcome(
     for requestOutcome: LifecycleRequestOutcome,
-    extensionWasVerifiedStopped: Bool
+    extensionWasVerifiedStopped: Bool,
+    extensionStopsAtRestart: Bool = false
   ) -> StopProtectionQuitOutcome {
     switch requestOutcome {
     case .completed where extensionWasVerifiedStopped:
       .stopped
+    // While an update waits for a restart, macOS completes the request by removing the waiting
+    // version at once, and the earlier version keeps running until the restart.
+    case .completed where extensionStopsAtRestart:
+      .requiresRestart
     case .completed:
       .failed(
         String(

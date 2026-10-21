@@ -78,15 +78,31 @@ public enum SystemCompatibilityOSBuild {
 public enum SystemCompatibilityCapabilityClass: String, Codable, Equatable, Hashable,
   Sendable
 {
+  /// A service that does one job of its own accord, on locations it chooses itself.
   case singlePurposeAutonomousService
+  /// A service that carries out operations an Apple program asks for, on the paths that
+  /// program chooses. The profile assessment documents the limits of client authentication.
+  case platformClientBroker
 }
 
+/// Public documentation and validation metadata for a profile's programs. It describes the
+/// profile to a reader and is checked when the catalog is validated. It is part of the catalog
+/// digest but not of the authorization digest, so it does not decide what an accepted profile allows.
 public struct SystemCompatibilityProfileEvidence: Codable, Equatable, Hashable, Sendable {
   public var capabilityClass: SystemCompatibilityCapabilityClass
+  /// Whether a third-party program can choose what the programs do or which paths they touch.
+  /// The catalog accepts a profile only when this is false.
   public var acceptsArbitraryThirdPartyCommandsOrPaths: Bool
+  /// The macOS builds, as `kern.osversion` reports them, on which the behavior was observed.
+  /// The builds an actor lists must be among them.
   public var observedOSBuilds: [String]
+  /// The calendar date (ISO 8601, `YYYY-MM-DD`) on which this evidence was last collected. It
+  /// tells a reader how old the evidence is and has no effect on what the profile allows.
   public var observedDate: String
+  /// A public documentation reference, such as a repository-relative path with a section anchor.
+  /// An absolute local path or `file://` URL is refused.
   public var evidenceReference: String
+  /// The programs' roles, permitted operations and trust limitations, as display text.
   public var capabilityAssessment: String
 
   public init(
@@ -107,40 +123,186 @@ public struct SystemCompatibilityProfileEvidence: Codable, Equatable, Hashable, 
   }
 }
 
+/// The requests a profile can allow, named like the authorization events. A mount is decided by
+/// its mount point alone and is never part of a profile.
+public enum SystemCompatibilityRequestKind: String, Codable, CaseIterable, Comparable, Hashable,
+  Sendable
+{
+  case open = "AUTH_OPEN"
+  case create = "AUTH_CREATE"
+  case rename = "AUTH_RENAME"
+  case unlink = "AUTH_UNLINK"
+  case link = "AUTH_LINK"
+  case clone = "AUTH_CLONE"
+  case copyFile = "AUTH_COPYFILE"
+  case truncate = "AUTH_TRUNCATE"
+  case exchangeData = "AUTH_EXCHANGEDATA"
+  case setMode = "AUTH_SETMODE"
+  case setOwner = "AUTH_SETOWNER"
+  case setFlags = "AUTH_SETFLAGS"
+  case setACL = "AUTH_SETACL"
+  case setExtendedAttribute = "AUTH_SETEXTATTR"
+  case deleteExtendedAttribute = "AUTH_DELETEEXTATTR"
+  case setAttributeList = "AUTH_SETATTRLIST"
+  case setTimes = "AUTH_UTIMES"
+
+  public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+}
+
+/// Code-signing flags as Endpoint Security reports them (`cs_blobs.h`).
+public enum SystemCompatibilityCodeSigning {
+  public static let valid: UInt32 = 0x0000_0001
+  public static let adhoc: UInt32 = 0x0000_0002
+  public static let getTaskAllow: UInt32 = 0x0000_0004
+  public static let invalidAllowed: UInt32 = 0x0000_0020
+  public static let kill: UInt32 = 0x0000_0200
+  public static let platformBinary: UInt32 = 0x0400_0000
+  public static let debugged: UInt32 = 0x1000_0000
+  public static let signed: UInt32 = 0x2000_0000
+  public static let devCode: UInt32 = 0x4000_0000
+
+  /// Every actor requires at least a valid, signed Apple platform binary.
+  public static let minimumRequired = valid | signed | platformBinary
+  /// Every actor rejects at least ad hoc signatures and code that can be debugged or whose
+  /// signature may be invalid.
+  public static let minimumForbidden = adhoc | getTaskAllow | invalidAllowed | debugged | devCode
+}
+
+/// The `fflag` bits of an `AUTH_OPEN` request, which use the kernel's file flags.
+public enum SystemCompatibilityOpenFlags {
+  /// `FWRITE`, `O_APPEND`, `O_CREAT`, `O_TRUNC` and `O_EXCL`: the flags with which an open can
+  /// change a file.
+  public static let modifying: UInt32 = 0x0002 | 0x0008 | 0x0200 | 0x0400 | 0x0800
+  /// Every flag except the modifying ones.
+  public static let readOnly: UInt32 = ~modifying
+  public static let any: UInt32 = .max
+}
+
+/// The effective users an actor may run as.
+public enum SystemCompatibilityEffectiveUser: String, Codable, Equatable, Hashable, Sendable {
+  /// Only root (user ID 0).
+  case root
+  /// Root, or the account that owns the policy's folder. Some Apple services, such as the
+  /// container manager of a logged-in user, run as that user rather than as root.
+  case rootOrFolderOwner
+}
+
+/// The paths a profile's requests may name.
+public enum SystemCompatibilityPathForm: String, Codable, Equatable, Hashable, Sendable {
+  /// Any path inside the policy's folder.
+  case anyPath
+  /// Only paths inside an app container or group container of the account that owns the
+  /// policy's folder: `<home>/Library/Containers/<name>` or
+  /// `<home>/Library/Group Containers/<name>`, or below them.
+  case appContainer
+
+  /// Whether `path`, as Endpoint Security reports it, has this form. `ownerHome` is the
+  /// folder owner's home folder with symbolic links resolved.
+  public func admits(_ path: String, ownerHome: String?, caseSensitive: Bool) -> Bool {
+    switch self {
+    case .anyPath:
+      return true
+    case .appContainer:
+      guard let ownerHome, path.hasPrefix("/"), ownerHome.hasPrefix("/") else { return false }
+      let components = path.split(separator: "/")
+      let home = ownerHome.split(separator: "/")
+      guard !components.contains(where: { $0 == "." || $0 == ".." }),
+        components.count >= home.count + 3
+      else { return false }
+      func same(_ lhs: Substring, _ rhs: Substring) -> Bool {
+        caseSensitive ? lhs == rhs : lhs.lowercased() == rhs.lowercased()
+      }
+      guard zip(components, home).allSatisfy(same) else { return false }
+      let folder = components[home.count + 1]
+      return same(components[home.count], "Library")
+        && (same(folder, "Containers") || same(folder, "Group Containers"))
+    }
+  }
+}
+
+/// One Apple system program a profile names, and what it may do in a policy's folder. An
+/// actor without requests is a launcher: it gets no access itself, but the programs of the
+/// profile that it starts count as started through the profile (see
+/// `ResolvedSystemCompatibilityProfile`).
 public struct SystemCompatibilityProfileActor: Codable, Equatable, Hashable, Sendable {
   public var signingIdentifier: String
+  public var allowedRequests: [SystemCompatibilityRequestKind]
+  /// The flags an `AUTH_OPEN` request may ask for; 0 when opens are not allowed.
   public var allowedOpenFlags: UInt32
   public var requiredCodeSigningFlags: UInt32
   public var forbiddenCodeSigningFlags: UInt32
+  public var allowedEffectiveUsers: SystemCompatibilityEffectiveUser
+  /// The macOS versions on which the actor is trusted.
   public var supportedOSRange: SystemCompatibilityOSRange
-  public var supportedOSBuilds: [String]
+  /// The macOS builds on which the actor's behavior was observed; evidence, not a condition.
+  public var observedOSBuilds: [String]
 
   public init(
     signingIdentifier: String,
+    allowedRequests: [SystemCompatibilityRequestKind],
     allowedOpenFlags: UInt32,
-    requiredCodeSigningFlags: UInt32 = 0,
-    forbiddenCodeSigningFlags: UInt32 = 0,
+    requiredCodeSigningFlags: UInt32 = SystemCompatibilityCodeSigning.minimumRequired,
+    forbiddenCodeSigningFlags: UInt32 = SystemCompatibilityCodeSigning.minimumForbidden,
+    allowedEffectiveUsers: SystemCompatibilityEffectiveUser = .root,
     supportedOSRange: SystemCompatibilityOSRange,
-    supportedOSBuilds: [String]
+    observedOSBuilds: [String]
   ) {
     self.signingIdentifier = signingIdentifier
+    self.allowedRequests = allowedRequests
     self.allowedOpenFlags = allowedOpenFlags
     self.requiredCodeSigningFlags = requiredCodeSigningFlags
     self.forbiddenCodeSigningFlags = forbiddenCodeSigningFlags
+    self.allowedEffectiveUsers = allowedEffectiveUsers
     self.supportedOSRange = supportedOSRange
-    self.supportedOSBuilds = supportedOSBuilds
+    self.observedOSBuilds = observedOSBuilds
   }
 
-  public func allows(
-    process: ProcessFacts,
-    requestedOpenFlags: UInt32
+  public var isLauncher: Bool { allowedRequests.isEmpty }
+
+  /// Whether the process is this program: an Apple platform binary with this signing identifier
+  /// and acceptable code-signing flags.
+  public func matches(_ process: ProcessFacts) -> Bool {
+    matches(
+      isPlatformBinary: process.isPlatformBinary, signingIdentifier: process.signingIdentifier,
+      codeSigningFlags: process.codeSigningFlags)
+  }
+
+  /// The same check for a program recorded in an execution history.
+  public func matches(_ program: ExecutionProgram) -> Bool {
+    matches(
+      isPlatformBinary: program.isPlatformBinary, signingIdentifier: program.signingIdentifier,
+      codeSigningFlags: program.codeSigningFlags)
+  }
+
+  private func matches(
+    isPlatformBinary: Bool, signingIdentifier candidate: String?, codeSigningFlags: UInt32
   ) -> Bool {
-    requestedOpenFlags != 0
-      && process.isPlatformBinary
-      && process.signingIdentifier == signingIdentifier
-      && process.codeSigningFlags & requiredCodeSigningFlags == requiredCodeSigningFlags
-      && process.codeSigningFlags & forbiddenCodeSigningFlags == 0
-      && requestedOpenFlags & ~allowedOpenFlags == 0
+    isPlatformBinary
+      && candidate == signingIdentifier
+      && codeSigningFlags & requiredCodeSigningFlags == requiredCodeSigningFlags
+      && codeSigningFlags & forbiddenCodeSigningFlags == 0
+  }
+
+  /// Whether a process running as `effectiveUserID` may act as this actor in a folder owned
+  /// by `folderOwnerUserID`.
+  public func allowsEffectiveUser(_ effectiveUserID: UInt32?, folderOwnerUserID: UInt32?)
+    -> Bool
+  {
+    guard let effectiveUserID else { return false }
+    if effectiveUserID == 0 { return true }
+    guard allowedEffectiveUsers == .rootOrFolderOwner, let folderOwnerUserID else {
+      return false
+    }
+    return effectiveUserID == folderOwnerUserID
+  }
+
+  /// Whether the actor may make this request. An open must not ask for a flag outside
+  /// `allowedOpenFlags`.
+  public func allows(_ request: SystemCompatibilityRequestKind, openFlags: UInt32?) -> Bool {
+    guard allowedRequests.contains(request) else { return false }
+    guard request == .open else { return true }
+    guard let openFlags else { return false }
+    return openFlags & ~allowedOpenFlags == 0
   }
 }
 
@@ -152,6 +314,7 @@ public struct SystemCompatibilityProfile: Codable, Equatable, Hashable, Identifi
   public var roleDescription: String
   public var consequence: String
   public var evidence: SystemCompatibilityProfileEvidence
+  public var pathForm: SystemCompatibilityPathForm
   public var actors: [SystemCompatibilityProfileActor]
 
   public init(
@@ -160,6 +323,7 @@ public struct SystemCompatibilityProfile: Codable, Equatable, Hashable, Identifi
     roleDescription: String,
     consequence: String,
     evidence: SystemCompatibilityProfileEvidence,
+    pathForm: SystemCompatibilityPathForm = .anyPath,
     actors: [SystemCompatibilityProfileActor]
   ) {
     self.id = id
@@ -167,37 +331,100 @@ public struct SystemCompatibilityProfile: Codable, Equatable, Hashable, Identifi
     self.roleDescription = roleDescription
     self.consequence = consequence
     self.evidence = evidence
+    self.pathForm = pathForm
     self.actors = actors
   }
 }
 
+/// A profile turned on for a policy and active on this Mac, with the actors trusted on the
+/// running macOS version.
+///
+/// A process acts under the profile when all of these hold, whatever the policy's program lists
+/// say and even without an observed execution history:
+/// - it is one of the actors: an Apple platform binary with the actor's signing identifier and
+///   code-signing flags, and the request is one the actor may make;
+/// - its effective user is root, or, for an actor that allows it, the account that owns the
+///   policy's folder;
+/// - every path of the request has the profile's path form (checked by the caller);
+/// - launchd started it, without a program of the user's session in between. With a complete
+///   observed history, the first program after launchd must itself be an actor or launcher of
+///   this profile, so the process is that daemon or a helper it started. Without a complete
+///   history, such as for a daemon that started before the extension, the kernel must report
+///   launchd (PID 1) as the process that forked it, or the process that forked it must still be
+///   its parent and be an actor or launcher of this profile that launchd forked, running as a
+///   user that program allows. This admits the plug-ins of a service that predates the
+///   extension, but not a longer chain.
+///
+/// A program in the policy's block list anywhere in the observed history still denies the
+/// request; the caller checks that first.
 public struct ResolvedSystemCompatibilityProfile: Equatable, Sendable {
   public var profileIdentifier: String
   public var authorizationDigest: String
+  public var pathForm: SystemCompatibilityPathForm
   public var actors: [SystemCompatibilityProfileActor]
 
   public init(
     profileIdentifier: String,
     authorizationDigest: String,
+    pathForm: SystemCompatibilityPathForm = .anyPath,
     actors: [SystemCompatibilityProfileActor]
   ) {
     self.profileIdentifier = profileIdentifier
     self.authorizationDigest = authorizationDigest
+    self.pathForm = pathForm
     self.actors = actors
   }
 
-  public func allows(
+  public func admits(
     process: ProcessFacts,
-    requestedOpenFlags: UInt32
+    request: SystemCompatibilityRequestKind,
+    openFlags: UInt32?,
+    origin: ExecutionOriginDecision,
+    parent: ExecutionProgram? = nil,
+    folderOwnerUserID: UInt32?
   ) -> Bool {
-    actors.contains {
-      $0.allows(process: process, requestedOpenFlags: requestedOpenFlags)
+    guard
+      let actor = actors.first(where: {
+        !$0.isLauncher && $0.matches(process)
+          && $0.allowsEffectiveUser(
+            process.effectiveUserID, folderOwnerUserID: folderOwnerUserID)
+      }),
+      actor.allows(request, openFlags: openFlags)
+    else { return false }
+    return wasStartedByLaunchd(
+      process, origin: origin, parent: parent, folderOwnerUserID: folderOwnerUserID)
+  }
+
+  /// `parent` is the program recorded for the process's current parent.
+  private func wasStartedByLaunchd(
+    _ process: ProcessFacts, origin: ExecutionOriginDecision, parent: ExecutionProgram?,
+    folderOwnerUserID: UInt32?
+  ) -> Bool {
+    guard origin.uncertainty == nil else {
+      if process.originalParentProcessID == 1 { return true }
+      // The parent that forked the process, still its parent, is a program of this profile
+      // that launchd forked.
+      guard let parent, let forker = process.originalParentProcessID, forker > 1,
+        process.parentProcessInstance == parent.instance, parent.instance.processID == forker,
+        parent.originalParentProcessID == 1
+      else { return false }
+      return actors.contains {
+        $0.matches(parent)
+          && $0.allowsEffectiveUser(
+            process.parentEffectiveUserID, folderOwnerUserID: folderOwnerUserID)
+      }
     }
+    // A complete history begins at launchd, so its first program is the one launchd started.
+    guard let first = origin.origin, first.identity != nil else { return false }
+    return actors.contains { $0.matches(first) }
   }
 }
 
 public struct SystemCompatibilityCatalog: Codable, Equatable, Sendable {
-  public static let currentSchemaVersion = 2
+  /// Schema 3 profiles have a path form, and their actors allowed requests and users. The
+  /// catalog is built in; its schema is part of the catalog digest but not of the profile
+  /// authorization digests that policies store.
+  public static let currentSchemaVersion = 3
   public static let maximumProfileCount = 256
   public static let maximumActorCount = 1_024
   /// Additional protection against programs that can act on another app's behalf.
@@ -206,7 +433,7 @@ public struct SystemCompatibilityCatalog: Codable, Equatable, Sendable {
   /// commands or paths. Giving them a compatibility exception could let an otherwise
   /// denied app use that exception indirectly. These are defensive exclusions, not
   /// a claim that every identifier exists on every supported OS. Ordinary user rules
-  /// remain separate from these automatically applied system-service exceptions.
+  /// remain separate from these system-service exceptions.
   public static let forbiddenCapabilityConduitSigningIdentifiers: Set<String> = [
     "com.apple.arch",
     "com.apple.automator",
@@ -221,6 +448,8 @@ public struct SystemCompatibilityCatalog: Codable, Equatable, Sendable {
     "com.apple.dash",
     "com.apple.dd",
     "com.apple.defaults",
+    // Carries out the Finder operations that scripts send to Finder.
+    "com.apple.desktopservices.desktopservicesscriptinghelper",
     "com.apple.ditto",
     "com.apple.dt.xcode",
     "com.apple.dt.xcode_select.tool-shim-public",
@@ -255,11 +484,13 @@ public struct SystemCompatibilityCatalog: Codable, Equatable, Sendable {
     "com.apple.tail",
     "com.apple.tee",
     "com.apple.terminal",
+    "com.apple.tmutil",
     "com.apple.unlink",
     "com.apple.unzip",
     "com.apple.vim",
     "com.apple.wc",
     "com.apple.xargs",
+    "com.apple.xcode-select",
     "com.apple.xcrun",
     "com.apple.xpc.launchctl",
     "com.apple.xxd",
@@ -301,58 +532,71 @@ public struct SystemCompatibilityCatalog: Codable, Equatable, Sendable {
       guard profileIdentifiers.insert(profile.id).inserted else {
         throw SystemCompatibilityValidationError.duplicateProfileIdentifier(profile.id)
       }
-      guard !profile.actors.isEmpty else {
+      guard profile.actors.contains(where: { !$0.isLauncher }) else {
         throw SystemCompatibilityValidationError.profileRequiresActor(profile.id)
       }
 
       var signingIdentifiers = Set<String>()
       for actor in profile.actors {
-        try Self.validateIdentifier(actor.signingIdentifier, field: "actor signing identifier")
-        guard
-          !Self.forbiddenCapabilityConduitSigningIdentifiers.contains(
-            actor.signingIdentifier.lowercased()
-          )
-        else {
-          throw SystemCompatibilityValidationError.forbiddenCapabilityConduit(
-            profile: profile.id,
-            signingIdentifier: actor.signingIdentifier
-          )
-        }
-        guard actor.allowedOpenFlags != 0 else {
-          throw SystemCompatibilityValidationError.emptyAllowedOpenFlags(
-            profile: profile.id,
-            signingIdentifier: actor.signingIdentifier
-          )
-        }
-        guard actor.requiredCodeSigningFlags & actor.forbiddenCodeSigningFlags == 0 else {
-          throw SystemCompatibilityValidationError.conflictingCodeSigningFlags(
-            profile: profile.id,
-            signingIdentifier: actor.signingIdentifier
-          )
-        }
+        try Self.validate(actor, profile: profile)
         guard signingIdentifiers.insert(actor.signingIdentifier).inserted else {
           throw SystemCompatibilityValidationError.duplicateActorIdentity(
             profile: profile.id,
             signingIdentifier: actor.signingIdentifier
           )
         }
-        try Self.validate(actor.supportedOSRange, profile: profile.id)
-        guard actor.supportedOSRange.maximumExclusive != nil else {
-          throw SystemCompatibilityValidationError.openEndedOSRange(profile.id)
-        }
-        try Self.validateOSBuilds(
-          actor.supportedOSBuilds,
-          field: "actor supported OS builds",
-          profile: profile.id
-        )
-        guard
-          Set(actor.supportedOSBuilds).isSubset(
-            of: Set(profile.evidence.observedOSBuilds)
-          )
-        else {
-          throw SystemCompatibilityValidationError.unsupportedBuildLacksEvidence(profile.id)
-        }
       }
+    }
+  }
+
+  private static func validate(
+    _ actor: SystemCompatibilityProfileActor, profile: SystemCompatibilityProfile
+  ) throws {
+    try validateIdentifier(actor.signingIdentifier, field: "actor signing identifier")
+    guard
+      !forbiddenCapabilityConduitSigningIdentifiers.contains(
+        actor.signingIdentifier.lowercased())
+    else {
+      throw SystemCompatibilityValidationError.forbiddenCapabilityConduit(
+        profile: profile.id,
+        signingIdentifier: actor.signingIdentifier
+      )
+    }
+    guard Set(actor.allowedRequests).count == actor.allowedRequests.count,
+      actor.allowedRequests.contains(.open) == (actor.allowedOpenFlags != 0)
+    else {
+      throw SystemCompatibilityValidationError.invalidAllowedRequests(
+        profile: profile.id,
+        signingIdentifier: actor.signingIdentifier
+      )
+    }
+    let minimumRequired = SystemCompatibilityCodeSigning.minimumRequired
+    let minimumForbidden = SystemCompatibilityCodeSigning.minimumForbidden
+    guard actor.requiredCodeSigningFlags & minimumRequired == minimumRequired,
+      actor.forbiddenCodeSigningFlags & minimumForbidden == minimumForbidden
+    else {
+      throw SystemCompatibilityValidationError.weakCodeSigningRequirement(
+        profile: profile.id,
+        signingIdentifier: actor.signingIdentifier
+      )
+    }
+    guard actor.requiredCodeSigningFlags & actor.forbiddenCodeSigningFlags == 0 else {
+      throw SystemCompatibilityValidationError.conflictingCodeSigningFlags(
+        profile: profile.id,
+        signingIdentifier: actor.signingIdentifier
+      )
+    }
+    try validate(actor.supportedOSRange, profile: profile.id)
+    guard actor.supportedOSRange.maximumExclusive != nil else {
+      throw SystemCompatibilityValidationError.openEndedOSRange(profile.id)
+    }
+    try validateOSBuilds(
+      actor.observedOSBuilds,
+      field: "actor observed OS builds",
+      profile: profile.id
+    )
+    guard Set(actor.observedOSBuilds).isSubset(of: Set(profile.evidence.observedOSBuilds)) else {
+      throw SystemCompatibilityValidationError.unsupportedBuildLacksEvidence(profile.id)
     }
   }
 
@@ -375,9 +619,16 @@ public struct SystemCompatibilityCatalog: Codable, Equatable, Sendable {
     return try authorizationDigest(for: profile)
   }
 
+  /// The entry that turns a catalog profile on for a policy.
+  public func policyEntry(profileIdentifier: String) throws -> PolicySystemCompatibilityProfile {
+    PolicySystemCompatibilityProfile(
+      profileIdentifier: profileIdentifier,
+      authorizationDigest: try authorizationDigest(profileIdentifier: profileIdentifier))
+  }
+
   public func catalogDigest() throws -> String {
     try validate()
-    var builder = StableDigestBuilder(domain: "pasu-fs-system-catalog-v2")
+    var builder = StableDigestBuilder(domain: "pasu-fs-system-catalog-v3")
     builder.append(schemaVersion)
     builder.append(profiles.count)
     for profile in profiles.sorted(by: { $0.id < $1.id }) {
@@ -394,28 +645,40 @@ public struct SystemCompatibilityCatalog: Codable, Equatable, Sendable {
       builder.append(profile.evidence.observedDate)
       builder.append(profile.evidence.evidenceReference)
       builder.append(profile.evidence.capabilityAssessment)
+      for actor in profile.actors.sorted(by: { $0.signingIdentifier < $1.signingIdentifier }) {
+        builder.append(actor.signingIdentifier)
+        builder.append(actor.observedOSBuilds.count)
+        for build in actor.observedOSBuilds.sorted() {
+          builder.append(build)
+        }
+      }
       builder.append(Self.authorizationDigestUnchecked(for: profile))
     }
     return builder.digest()
   }
 
+  /// Covers everything that decides what the profile allows, and nothing else: changing a name,
+  /// a description or the evidence keeps the digest, so the approval stays valid.
   private static func authorizationDigestUnchecked(
     for profile: SystemCompatibilityProfile
   ) -> String {
-    var builder = StableDigestBuilder(domain: "pasu-fs-system-profile-authorization-v2")
+    var builder = StableDigestBuilder(domain: "pasu-fs-system-profile-authorization-v3")
     builder.append(profile.id)
-    builder.append(true)  // requires Apple platform binary
-    builder.append(true)  // direct actor only; no descendant inheritance
+    builder.append(true)  // requires an Apple platform binary
+    builder.append(true)  // requires root, or the folder owner where an actor allows it
+    builder.append(true)  // requires a launchd lineage without a user-session program
+    builder.append(profile.pathForm.rawValue)
     builder.append(profile.actors.count)
     for actor in profile.actors.sorted(by: { $0.signingIdentifier < $1.signingIdentifier }) {
       builder.append(actor.signingIdentifier)
+      builder.append(actor.allowedRequests.count)
+      for request in actor.allowedRequests.sorted() {
+        builder.append(request.rawValue)
+      }
       builder.append(actor.allowedOpenFlags)
       builder.append(actor.requiredCodeSigningFlags)
       builder.append(actor.forbiddenCodeSigningFlags)
-      builder.append(actor.supportedOSBuilds.count)
-      for build in actor.supportedOSBuilds.sorted() {
-        builder.append(build)
-      }
+      builder.append(actor.allowedEffectiveUsers.rawValue)
       builder.append(actor.supportedOSRange.minimum.major)
       builder.append(actor.supportedOSRange.minimum.minor)
       builder.append(actor.supportedOSRange.minimum.patch)
@@ -450,10 +713,9 @@ public struct SystemCompatibilityCatalog: Codable, Equatable, Sendable {
     _ evidence: SystemCompatibilityProfileEvidence,
     profile: String
   ) throws {
-    guard evidence.capabilityClass == .singlePurposeAutonomousService,
-      !evidence.acceptsArbitraryThirdPartyCommandsOrPaths
-    else {
-      throw SystemCompatibilityValidationError.ineligibleCapabilityClass(profile)
+    // Either class qualifies only while no third-party program can choose what it does.
+    guard !evidence.acceptsArbitraryThirdPartyCommandsOrPaths else {
+      throw SystemCompatibilityValidationError.acceptsThirdPartyChoices(profile)
     }
     try validateOSBuilds(
       evidence.observedOSBuilds,
@@ -463,7 +725,7 @@ public struct SystemCompatibilityCatalog: Codable, Equatable, Sendable {
     guard isISOCalendarDate(evidence.observedDate) else {
       throw SystemCompatibilityValidationError.invalidEvidenceDate(profile)
     }
-    try validateIdentifier(evidence.evidenceReference, field: "evidence reference")
+    try validateDisplayText(evidence.evidenceReference, field: "evidence reference")
     guard !evidence.evidenceReference.hasPrefix("/"),
       !evidence.evidenceReference.localizedCaseInsensitiveContains("file://")
     else {
@@ -533,172 +795,19 @@ public struct SystemCompatibilityCatalog: Codable, Equatable, Sendable {
   }
 }
 
-public enum BuiltInSystemCompatibilityCatalog {
-  /// No system process is trusted before its exact Endpoint Security behavior
-  /// has been observed on every supported host configuration.
-  public static let catalog = SystemCompatibilityCatalog(profiles: [])
-}
-
-public struct ApprovedSystemCompatibilityProfile: Codable, Equatable, Hashable, Sendable {
-  public var profileIdentifier: String
-  public var approvedAuthorizationDigest: String
-  public var isEnabled: Bool
-
-  public init(
-    profileIdentifier: String,
-    approvedAuthorizationDigest: String,
-    isEnabled: Bool
-  ) {
-    self.profileIdentifier = profileIdentifier
-    self.approvedAuthorizationDigest = approvedAuthorizationDigest
-    self.isEnabled = isEnabled
-  }
-}
-
-public struct PolicySystemCompatibilityBinding: Codable, Equatable, Sendable {
-  public var policyIdentifier: UUID
-  public var approvedPolicyMode: PolicyMode
-  public var approvedPolicyType: PolicyType
-  public var approvedCanonicalProtectedRoot: String
-  public var profiles: [ApprovedSystemCompatibilityProfile]
-
-  public init(
-    policyIdentifier: UUID,
-    approvedPolicyMode: PolicyMode,
-    approvedPolicyType: PolicyType,
-    approvedCanonicalProtectedRoot: String,
-    profiles: [ApprovedSystemCompatibilityProfile]
-  ) {
-    self.policyIdentifier = policyIdentifier
-    self.approvedPolicyMode = approvedPolicyMode
-    self.approvedPolicyType = approvedPolicyType
-    self.approvedCanonicalProtectedRoot = approvedCanonicalProtectedRoot
-    self.profiles = profiles
-  }
-
-  public init(policy: DirectoryPolicy, profiles: [ApprovedSystemCompatibilityProfile]) {
-    self.init(
-      policyIdentifier: policy.id,
-      approvedPolicyMode: policy.mode,
-      approvedPolicyType: policy.policyType,
-      approvedCanonicalProtectedRoot: PolicySetDocument.canonicalPathComparisonKey(
-        policy.protectedRootPath
-      ),
-      profiles: profiles
-    )
-  }
-
-  public func matchesContext(of policy: DirectoryPolicy) -> Bool {
-    policyIdentifier == policy.id
-      && approvedPolicyMode == policy.mode
-      && approvedPolicyType == policy.policyType
-      && approvedCanonicalProtectedRoot
-        == PolicySetDocument.canonicalPathComparisonKey(policy.protectedRootPath)
-  }
-}
-
-public struct SystemCompatibilitySettingsDocument: Codable, Equatable, Sendable {
-  public static let currentSchemaVersion = 1
-  public static let maximumBindingCount = PolicySetDocument.maximumPolicyCount
-  public static let maximumApprovalCount = 1_024
-
-  public var schemaVersion: Int
-  public var settingsIdentifier: UUID
-  public var revision: UInt64
-  public var policySetIdentifier: UUID
-  public var bindings: [PolicySystemCompatibilityBinding]
-
-  public init(
-    schemaVersion: Int = Self.currentSchemaVersion,
-    settingsIdentifier: UUID,
-    revision: UInt64,
-    policySetIdentifier: UUID,
-    bindings: [PolicySystemCompatibilityBinding]
-  ) {
-    self.schemaVersion = schemaVersion
-    self.settingsIdentifier = settingsIdentifier
-    self.revision = revision
-    self.policySetIdentifier = policySetIdentifier
-    self.bindings = bindings
-  }
-
-  public func validateStructure() throws {
-    guard schemaVersion == Self.currentSchemaVersion else {
-      throw SystemCompatibilityValidationError.unsupportedSettingsSchemaVersion(schemaVersion)
-    }
-    guard revision > 0 else {
-      throw SystemCompatibilityValidationError.invalidSettingsRevision
-    }
-    guard bindings.count <= Self.maximumBindingCount else {
-      throw SystemCompatibilityValidationError.tooManyBindings(bindings.count)
-    }
-    let approvalCount = bindings.reduce(into: 0) { $0 += $1.profiles.count }
-    guard approvalCount <= Self.maximumApprovalCount else {
-      throw SystemCompatibilityValidationError.tooManyApprovals(approvalCount)
-    }
-
-    var policyIdentifiers = Set<UUID>()
-    for binding in bindings {
-      guard policyIdentifiers.insert(binding.policyIdentifier).inserted else {
-        throw SystemCompatibilityValidationError.duplicatePolicyBinding(
-          binding.policyIdentifier
-        )
-      }
-      guard binding.approvedPolicyType == .whitelist else {
-        throw SystemCompatibilityValidationError.blacklistBindingForbidden(
-          binding.policyIdentifier
-        )
-      }
-      guard !binding.approvedCanonicalProtectedRoot.isEmpty,
-        binding.approvedCanonicalProtectedRoot.hasPrefix("/")
-      else {
-        throw SystemCompatibilityValidationError.invalidApprovedRoot(
-          binding.policyIdentifier
-        )
-      }
-
-      var profileIdentifiers = Set<String>()
-      for approval in binding.profiles {
-        guard !approval.profileIdentifier.isEmpty,
-          approval.profileIdentifier.count <= 512
-        else {
-          throw SystemCompatibilityValidationError.invalidField("approved profile identifier")
-        }
-        guard
-          SystemCompatibilityDigest.isCanonicalSHA256(
-            approval.approvedAuthorizationDigest
-          )
-        else {
-          throw SystemCompatibilityValidationError.invalidAuthorizationDigest(
-            approval.profileIdentifier
-          )
-        }
-        guard profileIdentifiers.insert(approval.profileIdentifier).inserted else {
-          throw SystemCompatibilityValidationError.duplicateProfileApproval(
-            policy: binding.policyIdentifier,
-            profile: approval.profileIdentifier
-          )
-        }
-      }
-    }
-  }
-
-}
-
 public enum SystemCompatibilityProfileState: String, Codable, Equatable, Sendable {
   case active
-  case disabled
+  /// The catalog changed what the profile allows since it was turned on for the policy.
   case needsReview
+  /// The catalog no longer has the profile.
   case missingProfile
+  /// None of the profile's actors is trusted on the running macOS version.
   case unsupportedOS
-  case policyContextChanged
-  case policyMissing
 }
 
 public struct SystemCompatibilityProfileResolution: Codable, Equatable, Sendable {
   public var policyIdentifier: UUID
   public var profileIdentifier: String
-  public var isEnabled: Bool
   public var state: SystemCompatibilityProfileState
   public var approvedAuthorizationDigest: String
   public var currentAuthorizationDigest: String?
@@ -706,14 +815,12 @@ public struct SystemCompatibilityProfileResolution: Codable, Equatable, Sendable
   public init(
     policyIdentifier: UUID,
     profileIdentifier: String,
-    isEnabled: Bool,
     state: SystemCompatibilityProfileState,
     approvedAuthorizationDigest: String,
     currentAuthorizationDigest: String? = nil
   ) {
     self.policyIdentifier = policyIdentifier
     self.profileIdentifier = profileIdentifier
-    self.isEnabled = isEnabled
     self.state = state
     self.approvedAuthorizationDigest = approvedAuthorizationDigest
     self.currentAuthorizationDigest = currentAuthorizationDigest
@@ -731,519 +838,108 @@ public struct SystemCompatibilityResolution: Equatable, Sendable {
     self.activeProfilesByPolicy = activeProfilesByPolicy
     self.profileResolutions = profileResolutions
   }
-}
-
-public enum SystemCompatibilityResolver {
-  public static func resolve(
-    settings: SystemCompatibilitySettingsDocument?,
-    policySet: PolicySetDocument,
-    catalog: SystemCompatibilityCatalog,
-    operatingSystemVersion: OperatingSystemVersion = ProcessInfo.processInfo
-      .operatingSystemVersion,
-    operatingSystemBuild: String = SystemCompatibilityOSBuild.current()
-  ) throws -> SystemCompatibilityResolution {
-    try policySet.validate()
-    try catalog.validate()
-    guard let settings else { return SystemCompatibilityResolution() }
-    try settings.validateStructure()
-    guard settings.policySetIdentifier == policySet.setIdentifier else {
-      return SystemCompatibilityResolution(
-        profileResolutions: settings.bindings.flatMap { binding in
-          binding.profiles.map { approval in
-            resolution(
-              binding,
-              approval,
-              state: .policyContextChanged
-            )
-          }
-        }
-      )
-    }
-
-    let policiesByID = Dictionary(uniqueKeysWithValues: policySet.policies.map { ($0.id, $0) })
-    var activeProfilesByPolicy: [UUID: [ResolvedSystemCompatibilityProfile]] = [:]
-    var profileResolutions: [SystemCompatibilityProfileResolution] = []
-
-    for binding in settings.bindings {
-      let policy = policiesByID[binding.policyIdentifier]
-      for approval in binding.profiles {
-        guard let policy else {
-          profileResolutions.append(
-            resolution(binding, approval, state: .policyMissing)
-          )
-          continue
-        }
-        guard binding.matchesContext(of: policy) else {
-          profileResolutions.append(
-            resolution(binding, approval, state: .policyContextChanged)
-          )
-          continue
-        }
-        guard let profile = catalog.profile(identifier: approval.profileIdentifier) else {
-          profileResolutions.append(
-            resolution(binding, approval, state: .missingProfile)
-          )
-          continue
-        }
-        let currentDigest = try catalog.authorizationDigest(for: profile)
-        guard approval.approvedAuthorizationDigest == currentDigest else {
-          profileResolutions.append(
-            resolution(
-              binding,
-              approval,
-              state: .needsReview,
-              currentDigest: currentDigest
-            )
-          )
-          continue
-        }
-        guard approval.isEnabled else {
-          profileResolutions.append(
-            resolution(
-              binding,
-              approval,
-              state: .disabled,
-              currentDigest: currentDigest
-            )
-          )
-          continue
-        }
-        let supportedActors = profile.actors.filter {
-          $0.supportedOSRange.contains(operatingSystemVersion)
-            && $0.supportedOSBuilds.contains(operatingSystemBuild)
-        }
-        guard !supportedActors.isEmpty else {
-          profileResolutions.append(
-            resolution(
-              binding,
-              approval,
-              state: .unsupportedOS,
-              currentDigest: currentDigest
-            )
-          )
-          continue
-        }
-
-        activeProfilesByPolicy[binding.policyIdentifier, default: []].append(
-          ResolvedSystemCompatibilityProfile(
-            profileIdentifier: profile.id,
-            authorizationDigest: currentDigest,
-            actors: supportedActors
-          )
-        )
-        profileResolutions.append(
-          resolution(
-            binding,
-            approval,
-            state: .active,
-            currentDigest: currentDigest
-          )
-        )
-      }
-    }
-
-    return SystemCompatibilityResolution(
-      activeProfilesByPolicy: activeProfilesByPolicy,
-      profileResolutions: profileResolutions
-    )
-  }
-
-  public static func validateForApply(
-    _ settings: SystemCompatibilitySettingsDocument,
-    against activeSettings: SystemCompatibilitySettingsDocument? = nil,
-    policySet: PolicySetDocument,
-    catalog: SystemCompatibilityCatalog,
-    operatingSystemVersion: OperatingSystemVersion = ProcessInfo.processInfo
-      .operatingSystemVersion,
-    operatingSystemBuild: String = SystemCompatibilityOSBuild.current()
-  ) throws {
-    guard settings.policySetIdentifier == policySet.setIdentifier else {
-      throw SystemCompatibilityValidationError.policySetIdentifierMismatch(
-        candidate: settings.policySetIdentifier,
-        active: policySet.setIdentifier
-      )
-    }
-    let resolution = try resolve(
-      settings: settings,
-      policySet: policySet,
-      catalog: catalog,
-      operatingSystemVersion: operatingSystemVersion,
-      operatingSystemBuild: operatingSystemBuild
-    )
-    let invalidEnabledApprovals = resolution.profileResolutions.filter {
-      $0.state != .active
-        && settings.isEnabled(
-          policyIdentifier: $0.policyIdentifier,
-          profileIdentifier: $0.profileIdentifier
-        )
-    }
-    let newlyInvalidApprovals = invalidEnabledApprovals.filter {
-      !isUnchangedEnabledApproval(
-        $0,
-        in: settings,
-        comparedWith: activeSettings
-      )
-    }
-    guard newlyInvalidApprovals.isEmpty else {
-      throw SystemCompatibilityValidationError.enabledApprovalIsNotActive(
-        newlyInvalidApprovals[0].profileIdentifier,
-        newlyInvalidApprovals[0].state
-      )
-    }
-  }
-
-  private static func isUnchangedEnabledApproval(
-    _ resolution: SystemCompatibilityProfileResolution,
-    in candidate: SystemCompatibilitySettingsDocument,
-    comparedWith active: SystemCompatibilitySettingsDocument?
-  ) -> Bool {
-    guard let active,
-      candidate.settingsIdentifier == active.settingsIdentifier,
-      candidate.policySetIdentifier == active.policySetIdentifier,
-      let candidateBinding = candidate.bindings.first(where: {
-        $0.policyIdentifier == resolution.policyIdentifier
-      }),
-      let activeBinding = active.bindings.first(where: {
-        $0.policyIdentifier == resolution.policyIdentifier
-      }),
-      candidateBinding.approvedPolicyMode == activeBinding.approvedPolicyMode,
-      candidateBinding.approvedPolicyType == activeBinding.approvedPolicyType,
-      candidateBinding.approvedCanonicalProtectedRoot
-        == activeBinding.approvedCanonicalProtectedRoot,
-      let candidateApproval = candidateBinding.profiles.first(where: {
-        $0.profileIdentifier == resolution.profileIdentifier
-      }),
-      let activeApproval = activeBinding.profiles.first(where: {
-        $0.profileIdentifier == resolution.profileIdentifier
-      })
-    else {
-      return false
-    }
-    return candidateApproval == activeApproval && activeApproval.isEnabled
-  }
-
-  private static func resolution(
-    _ binding: PolicySystemCompatibilityBinding,
-    _ approval: ApprovedSystemCompatibilityProfile,
-    state: SystemCompatibilityProfileState,
-    currentDigest: String? = nil
-  ) -> SystemCompatibilityProfileResolution {
-    SystemCompatibilityProfileResolution(
-      policyIdentifier: binding.policyIdentifier,
-      profileIdentifier: approval.profileIdentifier,
-      isEnabled: approval.isEnabled,
-      state: state,
-      approvedAuthorizationDigest: approval.approvedAuthorizationDigest,
-      currentAuthorizationDigest: currentDigest
-    )
-  }
-}
-
-public struct SystemCompatibilitySettingsReconciliation: Equatable, Sendable {
-  public var document: SystemCompatibilitySettingsDocument
-  public var removedPolicyBindingCount: Int
-  public var removedProfileApprovalCount: Int
-
-  public init(
-    document: SystemCompatibilitySettingsDocument,
-    removedPolicyBindingCount: Int,
-    removedProfileApprovalCount: Int
-  ) {
-    self.document = document
-    self.removedPolicyBindingCount = removedPolicyBindingCount
-    self.removedProfileApprovalCount = removedProfileApprovalCount
-  }
-
-  public var removedItemCount: Int {
-    removedPolicyBindingCount + removedProfileApprovalCount
-  }
-}
-
-public enum SystemCompatibilitySettingsReconciler {
-  public static func reconcile(
-    _ settings: SystemCompatibilitySettingsDocument,
-    policySet: PolicySetDocument,
-    catalog: SystemCompatibilityCatalog
-  ) throws -> SystemCompatibilitySettingsReconciliation {
-    try settings.validateStructure()
-    try policySet.validate()
-    try catalog.validate()
-    guard settings.policySetIdentifier == policySet.setIdentifier else {
-      throw SystemCompatibilityValidationError.policySetIdentifierMismatch(
-        candidate: settings.policySetIdentifier,
-        active: policySet.setIdentifier
-      )
-    }
-
-    let policiesByID = Dictionary(uniqueKeysWithValues: policySet.policies.map { ($0.id, $0) })
-    let availableProfileIDs = Set(catalog.profiles.map(\.id))
-    var removedBindings = 0
-    var removedApprovals = 0
-    var reconciledBindings: [PolicySystemCompatibilityBinding] = []
-
-    for var binding in settings.bindings {
-      guard let policy = policiesByID[binding.policyIdentifier],
-        policy.policyType == .whitelist
-      else {
-        removedBindings += 1
-        continue
-      }
-      let originalApprovalCount = binding.profiles.count
-      binding.profiles.removeAll {
-        !availableProfileIDs.contains($0.profileIdentifier)
-      }
-      removedApprovals += originalApprovalCount - binding.profiles.count
-      if binding.profiles.isEmpty {
-        removedBindings += 1
-      } else {
-        reconciledBindings.append(binding)
-      }
-    }
-
-    var document = settings
-    document.bindings = reconciledBindings
-    try document.validateStructure()
-    return SystemCompatibilitySettingsReconciliation(
-      document: document,
-      removedPolicyBindingCount: removedBindings,
-      removedProfileApprovalCount: removedApprovals
-    )
-  }
-}
-
-extension SystemCompatibilitySettingsDocument {
-  fileprivate func isEnabled(policyIdentifier: UUID, profileIdentifier: String) -> Bool {
-    bindings.first { $0.policyIdentifier == policyIdentifier }?
-      .profiles.first { $0.profileIdentifier == profileIdentifier }?.isEnabled == true
-  }
-}
-
-public enum SystemCompatibilitySettingsCodec {
-  public static let maximumDocumentSize = 262_144
-
-  private static let topLevelKeys: Set<String> = [
-    "schemaVersion", "settingsIdentifier", "revision", "policySetIdentifier", "bindings",
-  ]
-  private static let bindingKeys: Set<String> = [
-    "policyIdentifier", "approvedPolicyMode", "approvedPolicyType",
-    "approvedCanonicalProtectedRoot", "profiles",
-  ]
-  private static let approvalKeys: Set<String> = [
-    "profileIdentifier", "approvedAuthorizationDigest", "isEnabled",
-  ]
-
-  public static func decode(_ data: Data) throws -> SystemCompatibilitySettingsDocument {
-    guard data.count <= maximumDocumentSize else {
-      throw SystemCompatibilitySettingsCodecError.documentTooLarge(data.count)
-    }
-    try validateKeys(in: data)
-    let document = try JSONDecoder().decode(SystemCompatibilitySettingsDocument.self, from: data)
-    try document.validateStructure()
-    return document
-  }
-
-  public static func encode(
-    _ document: SystemCompatibilitySettingsDocument,
-    prettyPrinted: Bool = true
-  ) throws -> Data {
-    try document.validateStructure()
-    let encoder = JSONEncoder()
-    encoder.outputFormatting = prettyPrinted ? [.prettyPrinted, .sortedKeys] : [.sortedKeys]
-    let data = try encoder.encode(document)
-    guard data.count <= maximumDocumentSize else {
-      throw SystemCompatibilitySettingsCodecError.documentTooLarge(data.count)
-    }
-    return data
-  }
-
-  public static func digest(of document: SystemCompatibilitySettingsDocument) throws -> String {
-    let data = try encode(document, prettyPrinted: false)
-    return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-  }
-
-  private static func validateKeys(in data: Data) throws {
-    let json = try JSONSerialization.jsonObject(with: data)
-    guard let object = json as? [String: Any] else {
-      throw SystemCompatibilitySettingsCodecError.topLevelObjectRequired
-    }
-    let unknownTopLevelKeys = Set(object.keys).subtracting(topLevelKeys).sorted()
-    guard unknownTopLevelKeys.isEmpty else {
-      throw SystemCompatibilitySettingsCodecError.unknownTopLevelKeys(unknownTopLevelKeys)
-    }
-    guard let bindings = object["bindings"] as? [Any] else {
-      throw SystemCompatibilitySettingsCodecError.bindingsArrayRequired
-    }
-    for (bindingIndex, value) in bindings.enumerated() {
-      guard let binding = value as? [String: Any] else {
-        throw SystemCompatibilitySettingsCodecError.bindingObjectRequired(bindingIndex)
-      }
-      let unknownBindingKeys = Set(binding.keys).subtracting(bindingKeys).sorted()
-      guard unknownBindingKeys.isEmpty else {
-        throw SystemCompatibilitySettingsCodecError.unknownBindingKeys(
-          index: bindingIndex,
-          keys: unknownBindingKeys
-        )
-      }
-      guard let profiles = binding["profiles"] as? [Any] else {
-        throw SystemCompatibilitySettingsCodecError.profilesArrayRequired(bindingIndex)
-      }
-      for (profileIndex, value) in profiles.enumerated() {
-        guard let approval = value as? [String: Any] else {
-          throw SystemCompatibilitySettingsCodecError.approvalObjectRequired(
-            binding: bindingIndex,
-            approval: profileIndex
-          )
-        }
-        let unknownApprovalKeys = Set(approval.keys).subtracting(approvalKeys).sorted()
-        guard unknownApprovalKeys.isEmpty else {
-          throw SystemCompatibilitySettingsCodecError.unknownApprovalKeys(
-            binding: bindingIndex,
-            approval: profileIndex,
-            keys: unknownApprovalKeys
-          )
-        }
-      }
-    }
-  }
-}
-
-public enum SystemCompatibilitySettingsUpdateDisposition: Equatable, Sendable {
-  case accepted
-  case unchanged
-}
-
-public enum SystemCompatibilitySettingsApplyResult: String, Codable, Sendable {
-  case accepted
-  case unchanged
-}
-
-public struct SystemCompatibilitySettingsApplyRequest: Codable, Equatable, Sendable {
-  public static let maximumEncodedSize = 524_288
-
-  public var catalogDigest: String
-  public var settingsData: Data
-
-  public init(catalogDigest: String, settingsData: Data) {
-    self.catalogDigest = catalogDigest
-    self.settingsData = settingsData
-  }
-}
-
-public struct SystemCompatibilitySettingsApplyReceipt: Codable, Equatable, Sendable {
-  public var result: SystemCompatibilitySettingsApplyResult
-  public var acceptedSettingsIdentifier: UUID
-  public var acceptedRevision: UInt64
-  public var acceptedDigest: String
-  public var acceptedAt: Date
-
-  public init(
-    result: SystemCompatibilitySettingsApplyResult,
-    acceptedSettingsIdentifier: UUID,
-    acceptedRevision: UInt64,
-    acceptedDigest: String,
-    acceptedAt: Date = Date()
-  ) {
-    self.result = result
-    self.acceptedSettingsIdentifier = acceptedSettingsIdentifier
-    self.acceptedRevision = acceptedRevision
-    self.acceptedDigest = acceptedDigest
-    self.acceptedAt = acceptedAt
-  }
-}
-
-public struct SystemCompatibilityStateSnapshot: Codable, Equatable, Sendable {
-  public var catalogDigest: String
-  public var settings: SystemCompatibilitySettingsDocument?
-  public var settingsDigest: String?
-  public var profileResolutions: [SystemCompatibilityProfileResolution]
-
-  public init(
-    catalogDigest: String,
-    settings: SystemCompatibilitySettingsDocument? = nil,
-    settingsDigest: String? = nil,
-    profileResolutions: [SystemCompatibilityProfileResolution] = []
-  ) {
-    self.catalogDigest = catalogDigest
-    self.settings = settings
-    self.settingsDigest = settingsDigest
-    self.profileResolutions = profileResolutions
-  }
 
   public var activeProfileCount: Int {
     profileResolutions.lazy.filter { $0.state == .active }.count
   }
-}
 
-public struct SystemCompatibilityWarningState: Equatable, Sendable {
-  public static let storageRejectionMessage =
-    "Stored system-compatibility settings could not be read, validated, or trusted. No compatibility profiles were activated."
-
-  public private(set) var storageWarning: String?
-  public private(set) var resolutionWarning: String?
-
-  public init(
-    storageWarning: String? = nil,
-    resolutionWarning: String? = nil
-  ) {
-    self.storageWarning = storageWarning
-    self.resolutionWarning = resolutionWarning
-  }
-
-  public mutating func recordStorageRejection() {
-    storageWarning = Self.storageRejectionMessage
-  }
-
-  @available(*, deprecated, message: "Use recordStorageRejection() for the fixed user warning.")
-  public mutating func recordStorageRejection(_ warning: String) {
-    storageWarning = warning
-  }
-
-  public mutating func clearStorageWarning() {
-    storageWarning = nil
-  }
-
-  public mutating func replaceResolutionWarning(_ warning: String?) {
-    resolutionWarning = warning
-  }
-
-  public var combinedWarning: String? {
-    let warnings = [storageWarning, resolutionWarning].compactMap { $0 }
-    return warnings.isEmpty ? nil : warnings.joined(separator: " ")
+  /// A status warning naming the profiles that are turned on but inactive, or nil.
+  public var inactiveProfileWarning: String? {
+    let inactive = profileResolutions.filter { $0.state != .active }
+    guard let first = inactive.first else { return nil }
+    if inactive.count == 1 {
+      return
+        "System-compatibility profile \(first.profileIdentifier) is inactive: \(first.state.rawValue)."
+    }
+    return "\(inactive.count) enabled system-compatibility profiles are inactive."
   }
 }
 
-public enum SystemCompatibilitySettingsUpdateValidator {
-  public static func validate(
-    candidate: SystemCompatibilitySettingsDocument,
-    against active: SystemCompatibilitySettingsDocument?
-  ) throws -> SystemCompatibilitySettingsUpdateDisposition {
-    try candidate.validateStructure()
-    guard let active else { return .accepted }
-    guard candidate.settingsIdentifier == active.settingsIdentifier else {
-      throw SystemCompatibilityValidationError.settingsIdentifierMismatch(
-        candidate: candidate.settingsIdentifier,
-        active: active.settingsIdentifier
-      )
-    }
-    guard candidate.policySetIdentifier == active.policySetIdentifier else {
-      throw SystemCompatibilityValidationError.policySetIdentifierMismatch(
-        candidate: candidate.policySetIdentifier,
-        active: active.policySetIdentifier
-      )
-    }
-    if candidate.revision < active.revision {
-      throw SystemCompatibilityValidationError.settingsRevisionDowngrade(
-        candidate: candidate.revision,
-        active: active.revision
-      )
-    }
-    if candidate.revision == active.revision {
-      guard candidate == active else {
-        throw SystemCompatibilityValidationError.settingsRevisionCollision(candidate.revision)
+/// Decides which of the profiles turned on in a policy set are active on this Mac.
+public enum SystemCompatibilityResolver {
+  public static func resolve(
+    policySet: PolicySetDocument,
+    catalog: SystemCompatibilityCatalog,
+    operatingSystemVersion: OperatingSystemVersion = ProcessInfo.processInfo
+      .operatingSystemVersion
+  ) throws -> SystemCompatibilityResolution {
+    try policySet.validate()
+    try catalog.validate()
+    var result = SystemCompatibilityResolution()
+    for policy in policySet.policies {
+      for entry in policy.systemCompatibilityProfiles {
+        let (resolution, active) = try resolve(
+          entry, policyIdentifier: policy.id, catalog: catalog,
+          operatingSystemVersion: operatingSystemVersion)
+        result.profileResolutions.append(resolution)
+        if let active {
+          result.activeProfilesByPolicy[policy.id, default: []].append(active)
+        }
       }
-      return .unchanged
     }
-    return .accepted
+    return result
+  }
+
+  /// Rejects a set that turns on a profile that would not be active on this Mac, so a profile
+  /// is never saved as on while it does nothing. An entry kept unchanged from `stored` may stay
+  /// inactive, for example after a catalog change; it then needs to be turned on again.
+  public static func validateNewlyTurnedOn(
+    candidate: PolicySetDocument, comparedTo stored: PolicySetDocument?,
+    resolution: SystemCompatibilityResolution
+  ) throws {
+    var previous: [UUID: Set<PolicySystemCompatibilityProfile>] = [:]
+    for policy in stored?.policies ?? [] {
+      previous[policy.id] = Set(policy.systemCompatibilityProfiles)
+    }
+    for policy in candidate.policies {
+      for entry in policy.systemCompatibilityProfiles
+      where previous[policy.id]?.contains(entry) != true {
+        guard
+          let state = resolution.profileResolutions.first(where: {
+            $0.policyIdentifier == policy.id && $0.profileIdentifier == entry.profileIdentifier
+          })?.state, state != .active
+        else { continue }
+        throw SystemCompatibilityValidationError.profileCannotBeTurnedOn(
+          entry.profileIdentifier, state)
+      }
+    }
+  }
+
+  /// The state of one entry, and the profile to apply when it is active.
+  public static func resolve(
+    _ entry: PolicySystemCompatibilityProfile,
+    policyIdentifier: UUID,
+    catalog: SystemCompatibilityCatalog,
+    operatingSystemVersion: OperatingSystemVersion = ProcessInfo.processInfo
+      .operatingSystemVersion
+  ) throws -> (SystemCompatibilityProfileResolution, ResolvedSystemCompatibilityProfile?) {
+    func resolution(_ state: SystemCompatibilityProfileState, _ digest: String? = nil)
+      -> SystemCompatibilityProfileResolution
+    {
+      SystemCompatibilityProfileResolution(
+        policyIdentifier: policyIdentifier, profileIdentifier: entry.profileIdentifier,
+        state: state, approvedAuthorizationDigest: entry.authorizationDigest,
+        currentAuthorizationDigest: digest)
+    }
+    guard let profile = catalog.profile(identifier: entry.profileIdentifier) else {
+      return (resolution(.missingProfile), nil)
+    }
+    let digest = try catalog.authorizationDigest(for: profile)
+    guard entry.authorizationDigest == digest else {
+      return (resolution(.needsReview, digest), nil)
+    }
+    let actors = profile.actors.filter {
+      $0.supportedOSRange.contains(operatingSystemVersion)
+    }
+    guard !actors.isEmpty else {
+      return (resolution(.unsupportedOS, digest), nil)
+    }
+    return (
+      resolution(.active, digest),
+      ResolvedSystemCompatibilityProfile(
+        profileIdentifier: profile.id, authorizationDigest: digest, pathForm: profile.pathForm,
+        actors: actors)
+    )
   }
 }
 
@@ -1251,62 +947,46 @@ public enum SystemCompatibilityValidationError: Error, Equatable, CustomStringCo
   Sendable
 {
   case unsupportedCatalogSchemaVersion(Int)
-  case unsupportedSettingsSchemaVersion(Int)
   case tooManyProfiles(Int)
   case tooManyActors(Int)
-  case tooManyBindings(Int)
-  case tooManyApprovals(Int)
   case invalidField(String)
   case duplicateProfileIdentifier(String)
   case profileRequiresActor(String)
   case duplicateActorIdentity(profile: String, signingIdentifier: String)
-  case emptyAllowedOpenFlags(profile: String, signingIdentifier: String)
+  case invalidAllowedRequests(profile: String, signingIdentifier: String)
+  case weakCodeSigningRequirement(profile: String, signingIdentifier: String)
   case conflictingCodeSigningFlags(profile: String, signingIdentifier: String)
   case invalidOSRange(String)
   case openEndedOSRange(String)
   case invalidOSBuildEvidence(String)
   case unsupportedBuildLacksEvidence(String)
-  case ineligibleCapabilityClass(String)
+  case acceptsThirdPartyChoices(String)
   case forbiddenCapabilityConduit(profile: String, signingIdentifier: String)
   case invalidEvidenceDate(String)
   case localEvidenceReferenceForbidden(String)
   case profileNotInCatalog(String)
-  case invalidSettingsRevision
-  case duplicatePolicyBinding(UUID)
-  case blacklistBindingForbidden(UUID)
-  case invalidApprovedRoot(UUID)
-  case invalidAuthorizationDigest(String)
-  case duplicateProfileApproval(policy: UUID, profile: String)
-  case policySetIdentifierMismatch(candidate: UUID, active: UUID)
-  case settingsIdentifierMismatch(candidate: UUID, active: UUID)
-  case settingsRevisionDowngrade(candidate: UInt64, active: UInt64)
-  case settingsRevisionCollision(UInt64)
-  case enabledApprovalIsNotActive(String, SystemCompatibilityProfileState)
+  case profileCannotBeTurnedOn(String, SystemCompatibilityProfileState)
 
   public var description: String {
     switch self {
     case .unsupportedCatalogSchemaVersion(let version):
       "Unsupported system-compatibility catalog schema version: \(version)."
-    case .unsupportedSettingsSchemaVersion(let version):
-      "Unsupported system-compatibility settings schema version: \(version)."
     case .tooManyProfiles(let count):
       "System-compatibility catalog contains too many profiles: \(count)."
     case .tooManyActors(let count):
       "System-compatibility catalog contains too many actors: \(count)."
-    case .tooManyBindings(let count):
-      "System-compatibility settings contain too many policy bindings: \(count)."
-    case .tooManyApprovals(let count):
-      "System-compatibility settings contain too many profile approvals: \(count)."
     case .invalidField(let field):
       "The \(field) is empty, too long, padded, or contains an unsupported character."
     case .duplicateProfileIdentifier(let identifier):
       "Duplicate system-compatibility profile identifier: \(identifier)."
     case .profileRequiresActor(let identifier):
-      "System-compatibility profile \(identifier) requires at least one actor."
+      "System-compatibility profile \(identifier) requires at least one actor with requests."
     case .duplicateActorIdentity(let profile, let signingIdentifier):
       "System-compatibility profile \(profile) repeats actor \(signingIdentifier)."
-    case .emptyAllowedOpenFlags(let profile, let signingIdentifier):
-      "System-compatibility profile \(profile) actor \(signingIdentifier) has no allowed open flags."
+    case .invalidAllowedRequests(let profile, let signingIdentifier):
+      "System-compatibility profile \(profile) actor \(signingIdentifier) has no requests, repeats one, or has open flags that do not match its requests."
+    case .weakCodeSigningRequirement(let profile, let signingIdentifier):
+      "System-compatibility profile \(profile) actor \(signingIdentifier) does not require a valid Apple platform signature."
     case .conflictingCodeSigningFlags(let profile, let signingIdentifier):
       "System-compatibility profile \(profile) actor \(signingIdentifier) requires and forbids the same code-signing flag."
     case .invalidOSRange(let profile):
@@ -1316,9 +996,9 @@ public enum SystemCompatibilityValidationError: Error, Equatable, CustomStringCo
     case .invalidOSBuildEvidence(let profile):
       "System-compatibility profile \(profile) has missing, duplicate, or invalid OS build evidence."
     case .unsupportedBuildLacksEvidence(let profile):
-      "System-compatibility profile \(profile) enables an OS build without matching evidence."
-    case .ineligibleCapabilityClass(let profile):
-      "System-compatibility profile \(profile) is not a single-purpose autonomous service or accepts arbitrary third-party commands or paths."
+      "System-compatibility profile \(profile) names an observed OS build without matching evidence."
+    case .acceptsThirdPartyChoices(let profile):
+      "System-compatibility profile \(profile) accepts arbitrary third-party commands or paths."
     case .forbiddenCapabilityConduit(let profile, let signingIdentifier):
       "System-compatibility profile \(profile) cannot catalog capability conduit \(signingIdentifier)."
     case .invalidEvidenceDate(let profile):
@@ -1327,65 +1007,8 @@ public enum SystemCompatibilityValidationError: Error, Equatable, CustomStringCo
       "System-compatibility profile \(profile) evidence must not contain a local absolute path."
     case .profileNotInCatalog(let identifier):
       "System-compatibility profile is not in the built-in catalog: \(identifier)."
-    case .invalidSettingsRevision:
-      "System-compatibility settings revision must be greater than zero."
-    case .duplicatePolicyBinding(let identifier):
-      "Duplicate system-compatibility binding for policy \(identifier.uuidString)."
-    case .blacklistBindingForbidden(let identifier):
-      "System-compatibility profiles cannot be bound to Blacklist policy \(identifier.uuidString)."
-    case .invalidApprovedRoot(let identifier):
-      "System-compatibility binding for policy \(identifier.uuidString) has an invalid approved root."
-    case .invalidAuthorizationDigest(let identifier):
-      "System-compatibility approval for \(identifier) has an invalid authorization digest."
-    case .duplicateProfileApproval(let policy, let profile):
-      "Policy \(policy.uuidString) repeats system-compatibility approval \(profile)."
-    case .policySetIdentifierMismatch(let candidate, let active):
-      "System-compatibility settings target policy set \(candidate.uuidString), not active set \(active.uuidString)."
-    case .settingsIdentifierMismatch(let candidate, let active):
-      "System-compatibility settings identifier \(candidate.uuidString) does not match active settings \(active.uuidString)."
-    case .settingsRevisionDowngrade(let candidate, let active):
-      "System-compatibility settings revision \(candidate) is older than active revision \(active)."
-    case .settingsRevisionCollision(let revision):
-      "System-compatibility settings revision \(revision) has different contents from the active settings."
-    case .enabledApprovalIsNotActive(let profile, let state):
-      "Enabled system-compatibility profile \(profile) cannot become active: \(state.rawValue)."
-    }
-  }
-}
-
-public enum SystemCompatibilitySettingsCodecError: Error, Equatable,
-  CustomStringConvertible, Sendable
-{
-  case documentTooLarge(Int)
-  case topLevelObjectRequired
-  case bindingsArrayRequired
-  case bindingObjectRequired(Int)
-  case profilesArrayRequired(Int)
-  case approvalObjectRequired(binding: Int, approval: Int)
-  case unknownTopLevelKeys([String])
-  case unknownBindingKeys(index: Int, keys: [String])
-  case unknownApprovalKeys(binding: Int, approval: Int, keys: [String])
-
-  public var description: String {
-    switch self {
-    case .documentTooLarge(let size):
-      "System-compatibility settings exceed the size limit: \(size) bytes."
-    case .topLevelObjectRequired:
-      "System-compatibility settings must contain one top-level object."
-    case .bindingsArrayRequired:
-      "System-compatibility settings must contain a bindings array."
-    case .bindingObjectRequired(let index):
-      "System-compatibility binding \(index) must be an object."
-    case .profilesArrayRequired(let index):
-      "System-compatibility binding \(index) must contain a profiles array."
-    case .approvalObjectRequired(let binding, let approval):
-      "System-compatibility approval \(approval) in binding \(binding) must be an object."
-    case .unknownTopLevelKeys(let keys):
-      "Unknown top-level system-compatibility settings keys: \(keys.joined(separator: ", "))."
-    case .unknownBindingKeys(let index, let keys):
-      "Unknown keys in system-compatibility binding \(index): \(keys.joined(separator: ", "))."
-    case .unknownApprovalKeys(let binding, let approval, let keys):
-      "Unknown keys in system-compatibility approval \(approval) of binding \(binding): \(keys.joined(separator: ", "))."
+    case .profileCannotBeTurnedOn(let identifier, let state):
+      "System-compatibility profile \(identifier) cannot be turned on: \(state.rawValue)."
     }
   }
 }

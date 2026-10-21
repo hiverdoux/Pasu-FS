@@ -30,8 +30,16 @@ let rules: [(String, String)] = [
   ),
   ("computer address", #"[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+\.(?:local|lan)\b"#),
   ("personal email", #"[A-Za-z0-9._+-]+@(?:icloud|gmail|outlook|hotmail|yahoo)\.com\b"#),
+  // Names and attribution trailers that automated coding tools leave behind.
   ("agent metadata", #"(?i)\b(?:codex|claude|anthropic|chatgpt|openai)\b|Co-Authored-By"#),
 ]
+
+// Working files and folders stay out of the public file set. They are named here so the check
+// does not depend on the ignore configuration of one checkout: the local configuration and
+// output folder, the folders that coding tools use, and build output.
+let privateFolders = [".local/", ".claude/", ".codex/", "dist/"]
+// Every other top-level Markdown file is a working note.
+let publicTopLevelDocuments = ["README.md", "SECURITY.md"]
 
 do {
   let data = try git(["ls-files", "--cached", "--others", "--exclude-standard", "-z"])
@@ -48,8 +56,9 @@ do {
     let lowercased = file.lowercased()
     let components = lowercased.split(separator: "/").map(String.init)
     let filename = components.last ?? lowercased
-    if file.hasPrefix(".local/") || ["AGENTS.md", "CLAUDE.md", "TODO.md"].contains(file)
-      || ["design/", "results/", "dist/", "VM/"].contains(where: file.hasPrefix)
+    let isTopLevelMarkdown = !file.contains("/") && lowercased.hasSuffix(".md")
+    if privateFolders.contains(where: file.hasPrefix)
+      || (isTopLevelMarkdown && !publicTopLevelDocuments.contains(file))
       || components.contains(where: [".build", ".swiftpm"].contains)
       || filename == ".ds_store" || filename.hasPrefix("._")
       || [

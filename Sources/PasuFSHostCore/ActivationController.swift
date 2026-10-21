@@ -2,7 +2,7 @@ import Foundation
 @preconcurrency import SystemExtensions
 import os
 
-public struct ExtensionInstallationProperties: Equatable, Sendable {
+public struct ExtensionInstallationProperties: Codable, Equatable, Sendable {
   public var bundleIdentifier: String
   public var bundleVersion: String
   public var bundleShortVersion: String
@@ -50,7 +50,11 @@ public enum ActivationEvent: Equatable, Sendable {
 public protocol ExtensionLifecycleControlling: Sendable {
   func activationEvents() -> AsyncStream<ActivationEvent>
   func deactivationEvents() -> AsyncStream<ActivationEvent>
+  /// Sends one properties request in this process. A long-running app reads the installation
+  /// states through `installationStateLauncher()` instead; see `InstallationStateQueryManager`.
   func propertiesEvents() -> AsyncStream<ActivationEvent>
+  /// Starts the short-lived processes that read the installation states for a long-running app.
+  func installationStateLauncher() -> any InstallationStateChildLaunching
 }
 
 public final class ActivationController: NSObject, OSSystemExtensionRequestDelegate,
@@ -63,6 +67,12 @@ public final class ActivationController: NSObject, OSSystemExtensionRequestDeleg
   }
 
   private let requests = OSAllocatedUnfairLock(initialState: [ObjectIdentifier: RequestState]())
+
+  /// The queue on which macOS calls the delegate. When a deactivation needs an administrator's
+  /// approval, the framework asks for it on this queue and waits there until the person answers
+  /// the password dialog, so it must not be the main queue, where the app's status checks run.
+  /// The delegate methods only use `requests` and the streams' continuations.
+  private let requestQueue = DispatchQueue(label: "com.example.pasu.fs.extension-requests")
 
   public func activationEvents() -> AsyncStream<ActivationEvent> {
     submit(action: "activate") { queue in
@@ -89,6 +99,11 @@ public final class ActivationController: NSObject, OSSystemExtensionRequestDeleg
         queue: queue
       )
     }
+  }
+
+  /// The app's own executable, run with the installation state command.
+  public func installationStateLauncher() -> any InstallationStateChildLaunching {
+    InstallationStateChildProcessLauncher()
   }
 
   public func requestNeedsUserApproval(_ request: OSSystemExtensionRequest) {
@@ -134,6 +149,10 @@ public final class ActivationController: NSObject, OSSystemExtensionRequestDeleg
     )
   }
 
+  /// The answer ends a properties request: macOS calls neither `didFinishWithResult` nor
+  /// `didFailWithError` after it. OSSystemExtensionManager keeps the request, so the delegate does
+  /// not. On macOS 27.2 the framework also keeps the request's connection to `sysextd` open after
+  /// this answer, until the process exits; see `InstallationStateQueryManager`.
   public func request(
     _ request: OSSystemExtensionRequest,
     foundProperties properties: [OSSystemExtensionProperties]
@@ -146,7 +165,7 @@ public final class ActivationController: NSObject, OSSystemExtensionRequestDeleg
     request: @escaping (DispatchQueue) -> OSSystemExtensionRequest
   ) -> AsyncStream<ActivationEvent> {
     AsyncStream { continuation in
-      let systemRequest = request(.main)
+      let systemRequest = request(requestQueue)
       systemRequest.delegate = self
       let identifier = ObjectIdentifier(systemRequest)
       requests.withLock { $0[identifier] = RequestState(continuation: continuation) }

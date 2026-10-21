@@ -1,17 +1,17 @@
+import AppKit
 import PasuFSConfiguration
 import SwiftUI
 
 struct PolicyLogView: View {
   @Bindable var model: AppModel
   let policyID: UUID
-  let onSwitchToProtection: () -> Void
 
   var body: some View {
     if let policy = model.activePolicy(id: policyID),
       let log = model.policyLogState(policyID: policyID)
     {
       PolicyLogContent(
-        model: model, policy: policy, log: log, onSwitchToProtection: onSwitchToProtection
+        model: model, policy: policy, log: log
       )
       .id(log.key)
     } else {
@@ -27,7 +27,6 @@ private struct PolicyLogContent: View {
   @Bindable var model: AppModel
   let policy: DirectoryPolicy
   @Bindable var log: PolicyLogState
-  let onSwitchToProtection: () -> Void
   @State private var window = WindowReference()
 
   var body: some View {
@@ -40,6 +39,7 @@ private struct PolicyLogContent: View {
       logBody
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .hardScrollEdges()
+      bottomBar
     }
     .frame(minWidth: 0)
     .toolbarSearch(
@@ -83,6 +83,9 @@ private struct PolicyLogContent: View {
     .onChange(of: log.wantsInspector) { updateInspector() }
     .task(id: log.key) { await model.refreshPolicyAuditLog(policyID: policy.id) }
     .focusedSceneValue(\.refreshCommand, RefreshCommandAction(perform: refresh))
+    .focusedSceneValue(
+      \.inspectorCommand,
+      InspectorCommandAction(isShown: log.wantsInspector) { log.wantsInspector.toggle() })
   }
 
   /// Shows the inspector only after the main window has dropped its minimum width, and hides it
@@ -108,49 +111,43 @@ private struct PolicyLogContent: View {
   // MARK: - Header
 
   private var header: some View {
-    VStack(alignment: .leading) {
-      if policy.mode == .audit {
-        AuditModeCallout(onSwitch: onSwitchToProtection)
+    HStack(spacing: 12) {
+      Picker("Show", selection: $log.presentation) {
+        Text("By Program").tag(PolicyLogPresentation.programs)
+        Text("All Events").tag(PolicyLogPresentation.events)
       }
-      HStack {
-        Picker("Show", selection: $log.presentation) {
-          Text("By Program").tag(PolicyLogPresentation.programs)
-          Text("All Events").tag(PolicyLogPresentation.events)
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .fixedSize()
-        if log.isLoading {
-          ProgressView()
-            .controlSize(.small)
-        }
-        Spacer()
-        Text(
-          "\(PathText.abbreviated(policy.protectedRootPath)) · \(log.batch.records.count) records loaded (up to 500)"
-        )
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .lineLimit(1)
-        .truncationMode(.middle)
+      .pickerStyle(.segmented)
+      .labelsHidden()
+      .fixedSize()
+      if log.isLoading {
+        ProgressView()
+          .controlSize(.small)
       }
-      notices
+      Spacer(minLength: 0)
+      PolicyLogNotices(notices: log.notices)
     }
     .padding()
   }
 
-  @ViewBuilder
-  private var notices: some View {
-    if let error = log.error {
-      WarningLabel(
-        text: log.hasLoaded
-          ? String(
-            localized:
-              "The log could not be refreshed: \(error) Showing the records loaded earlier.")
-          : String(localized: "The log could not be loaded: \(error)")
-      )
-    }
-    if let warning = log.warning {
-      WarningLabel(text: warning)
+  private var bottomBar: some View {
+    VStack(spacing: 0) {
+      Divider()
+      HStack(spacing: 8) {
+        Text(PathText.abbreviated(policy.protectedRootPath))
+          .lineLimit(1)
+          .truncationMode(.middle)
+          .help(policy.protectedRootPath)
+        Text("·")
+        Text("\(log.batch.records.count) records loaded (up to 500)")
+          .fixedSize()
+        Spacer(minLength: 0)
+      }
+      .font(.caption)
+      .foregroundStyle(.secondary)
+      .padding(.horizontal)
+      .padding(.vertical, 8)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(.bar)
     }
   }
 
@@ -208,6 +205,11 @@ private struct PolicyLogContent: View {
               }
             }
           }
+          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+          .contentShape(Rectangle())
+          .contextMenu {
+            LogCopyButton("Copy Program Name", value: summary.displayName)
+          }
         }
         .width(min: 160, ideal: 220)
 
@@ -221,20 +223,25 @@ private struct PolicyLogContent: View {
               .lineLimit(1)
               .truncationMode(.middle)
           }
+          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+          .contentShape(Rectangle())
+          .contextMenu {
+            LogCopyButton("Copy Signing Identifier", value: signingIdentifier(summary))
+          }
         }
         .width(min: 150, ideal: 210)
 
         TableColumn("This Policy") { summary in
           VStack(alignment: .leading) {
             if let decision = summary.latestDecision {
-              DecisionText(decision: decision)
+              LatestDecisionText(summary: summary, decision: decision)
             }
             Text("Denied \(summary.deniedCount) · Allowed \(summary.allowedCount)")
               .font(.caption)
               .foregroundStyle(.secondary)
           }
         }
-        .width(min: 110, ideal: 140)
+        .width(min: 110, ideal: 180)
 
         TableColumn("Last Access") { summary in
           Text(summary.lastSeen, format: .dateTime.month(.defaultDigits).day().hour().minute())
@@ -245,7 +252,7 @@ private struct PolicyLogContent: View {
         TableColumn("Rule") { summary in
           ProgramRuleAction(model: model, policy: policy, summary: summary)
         }
-        .width(min: 120, ideal: 150)
+        .width(min: 150, ideal: 190)
       }
       .alternatingRowBackgrounds()
     }
@@ -269,7 +276,7 @@ private struct PolicyLogContent: View {
         }
         .width(min: 90, ideal: 100, max: 120)
 
-        TableColumn("Program", value: \.process) { row in
+        TableColumn("Access Process", value: \.process) { row in
           VStack(alignment: .leading) {
             Text(ProcessText.preview(row.record))
               .lineLimit(1)
@@ -282,6 +289,14 @@ private struct PolicyLogContent: View {
                 .truncationMode(.middle)
             }
           }
+          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+          .contentShape(Rectangle())
+          .contextMenu {
+            LogCopyButton(
+              "Copy Responsible Process Name", value: responsibleProcessName(row.record))
+            LogCopyButton("Copy Access Process Name", value: row.record.directProcessName)
+            LogCopyButton("Copy Signing Identifier", value: row.record.signingIdentifier)
+          }
         }
         .width(min: 120, ideal: 180)
 
@@ -290,25 +305,62 @@ private struct PolicyLogContent: View {
             .font(.caption.monospaced())
             .lineLimit(1)
             .truncationMode(.middle)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .contextMenu {
+              LogCopyButton("Copy Path", value: row.record.targetPath)
+            }
         }
-        .width(min: 120, ideal: 220)
+        .width(min: 120, ideal: 180)
 
         TableColumn("This Policy", value: \.decision) { row in
-          if let decision = row.record.policyEvaluations?.first(where: {
-            $0.policyIdentifier == policy.id
-          })?.decision ?? row.record.policyEvaluations?.first?.decision {
-            DecisionText(decision: decision)
+          if let evaluation = row.record.evaluation(for: policy.id) {
+            VStack(alignment: .leading) {
+              DecisionText(decision: evaluation.decision)
+              if evaluation.retiredFolderPath != nil {
+                Text("Retired path")
+                  .font(.caption)
+                  .foregroundStyle(.orange)
+              }
+              // The recorded reason. It is not worked out again from the current rules. It wraps
+              // to a second line when the column is narrow, such as while the inspector is open.
+              if let reason = DecisionReasonText.summary(evaluation) {
+                Text(reason)
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+                  .lineLimit(2)
+                  .help(reason)
+              }
+            }
           } else {
             Text("Unavailable")
               .foregroundStyle(.secondary)
           }
         }
-        .width(min: 80, ideal: 100)
+        .width(min: 80, ideal: 190)
 
         TableColumn("Response", value: \.response) { row in
-          ResponseText(response: row.response)
+          ResponseText(response: row.response, deadlineMissMode: model.deadlineMissMode)
         }
         .width(min: 60, ideal: 70)
+
+        // How many requests the record stands for, and when the last of them came.
+        TableColumn("Requests", value: \.requestCount) { row in
+          VStack(alignment: .trailing) {
+            Text(row.requestCount, format: .number)
+              .monospacedDigit()
+            if row.requestCount > 1 {
+              Text(
+                "Last \(row.record.lastRequestTimestamp.formatted(date: .omitted, time: .standard))"
+              )
+              .font(.caption2)
+              .foregroundStyle(.secondary)
+              .monospacedDigit()
+            }
+          }
+          .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .width(min: 60, ideal: 90, max: 130)
       }
       .alternatingRowBackgrounds()
     }
@@ -348,6 +400,13 @@ private struct PolicyLogContent: View {
 
   // MARK: - Text
 
+  private func responsibleProcessName(_ record: AuditEventRecord) -> String? {
+    guard let lineage = record.processLineage, let responsible = lineage.responsible else {
+      return nil
+    }
+    return lineage.processes.first { $0.key == responsible }?.displayName
+  }
+
   private func signingIdentifier(_ summary: PolicyProgramSummary) -> String? {
     switch summary.identity {
     case .teamSigned(_, let signing), .platformBinary(let signing): signing
@@ -372,50 +431,56 @@ private struct PolicyLogContent: View {
   }
 }
 
-/// Tells the user an Audit policy blocks nothing and offers the next step.
-private struct AuditModeCallout: View {
-  let onSwitch: () -> Void
+private struct LogCopyButton: View {
+  let title: LocalizedStringKey
+  let value: String?
 
-  var body: some View {
-    HStack {
-      Label {
-        Text("This Audit policy blocks nothing.")
-      } icon: {
-        Image(systemName: "eye")
-          .foregroundStyle(.blue)
-      }
-      Spacer()
-      Button("Switch to Protection…", action: onSwitch)
-    }
+  init(_ title: LocalizedStringKey, value: String?) {
+    self.title = title
+    self.value = value
   }
 
+  var body: some View {
+    Button(title) {
+      guard let value, !value.isEmpty else { return }
+      NSPasteboard.general.clearContents()
+      NSPasteboard.general.setString(value, forType: .string)
+    }
+    .disabled(value?.isEmpty ?? true)
+  }
 }
 
-/// The rule action for one program row: add it, show that it is listed, or explain why not.
+/// The rule action for one program row: add it to a list, show the lists it is in, or explain
+/// why it can't be added.
 private struct ProgramRuleAction: View {
   let model: AppModel
   let policy: DirectoryPolicy
   let summary: PolicyProgramSummary
 
   var body: some View {
-    if let rule = model.draftContainsRule(policyID: policy.id, summary: summary) {
-      Text(
-        rule.isEnabled
-          ? PolicyBehaviorText.inListTitle(listType)
-          : String(localized: "\(PolicyBehaviorText.inListTitle(listType)) · Off")
-      )
-      .font(.caption)
-      .foregroundStyle(.secondary)
+    let allow = model.draftRule(policyID: policy.id, list: .allow, summary: summary)
+    let deny = model.draftRule(policyID: policy.id, list: .deny, summary: summary)
+    if allow != nil, deny != nil {
+      Text("In Both Lists")
+        .font(.caption)
+        .foregroundStyle(.secondary)
     } else if let candidate = summary.ruleCandidate {
-      Button(PolicyBehaviorText.addToListTitle(listType)) {
-        do {
-          try model.addRule(policyID: policy.id, from: candidate)
-        } catch {
-          model.lastError = UserFacingError.message(error)
+      Menu(menuTitle(allow: allow, deny: deny)) {
+        if allow == nil {
+          Button(PolicyBehaviorText.addToListTitle(.allow)) {
+            add(candidate, to: .allow)
+          }
+          // Programs to Allow stays as it is while the policy doesn't use it.
+          .disabled(draft?.isBlacklistEnabled ?? policy.isBlacklistEnabled)
+        }
+        if deny == nil {
+          Button(PolicyBehaviorText.addToListTitle(.deny)) {
+            add(candidate, to: .deny)
+          }
         }
       }
-      .buttonStyle(.bordered)
       .controlSize(.small)
+      .fixedSize()
     } else {
       Label("Can’t Add", systemImage: "info.circle")
         .font(.caption)
@@ -424,8 +489,58 @@ private struct ProgramRuleAction: View {
     }
   }
 
-  private var listType: PolicyType {
-    model.policyDraft(id: policy.id)?.policyType ?? policy.policyType
+  private var draft: DirectoryPolicyDraft? { model.policyDraft(id: policy.id) }
+
+  private func menuTitle(allow: PolicyRule?, deny: PolicyRule?) -> String {
+    guard
+      let (rule, list) = allow.map({ ($0, PolicyRuleList.allow) })
+        ?? deny.map({ ($0, PolicyRuleList.deny) })
+    else { return String(localized: "Add Rule") }
+    let title = PolicyBehaviorText.inListTitle(list)
+    return rule.isEnabled ? title : String(localized: "\(title) · Off")
+  }
+
+  private func add(_ candidate: AuditRuleCandidate, to list: PolicyRuleList) {
+    do {
+      try model.addRule(policyID: policy.id, to: list, from: candidate)
+    } catch {
+      model.lastError = UserFacingError.message(error)
+    }
+  }
+}
+
+/// A program's latest decision. One made under an earlier policy revision than the policies in
+/// use is shown in the secondary color and marked, so it isn't read as what the current rules
+/// decide.
+private struct LatestDecisionText: View {
+  let summary: PolicyProgramSummary
+  let decision: PolicyEvaluationDecision
+
+  var body: some View {
+    if summary.latestDecisionPrecedesCurrentRevision,
+      let revision = summary.latestDecisionRevision, let current = summary.currentRevision
+    {
+      // The mark moves below the decision when the column is too narrow for both, such as while
+      // the inspector is open.
+      ViewThatFits(in: .horizontal) {
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+          Text(decision.displayName)
+          Text("·")
+          Text("Earlier revision")
+            .font(.caption)
+        }
+        VStack(alignment: .leading, spacing: 0) {
+          Text(decision.displayName)
+          Text("Earlier revision")
+            .font(.caption)
+        }
+      }
+      .lineLimit(1)
+      .foregroundStyle(.secondary)
+      .help(String(localized: "Decided under revision \(revision) · Current revision \(current)"))
+    } else {
+      DecisionText(decision: decision)
+    }
   }
 }
 
@@ -446,10 +561,17 @@ private struct ProgramDetails: View {
       }
       Section {
         Text(
-          "\(summary.observationCount) opens · Denied \(summary.deniedCount) · Allowed \(summary.allowedCount)"
+          "\(summary.observationCount) requests · Denied \(summary.deniedCount) · Allowed \(summary.allowedCount)"
         )
         Text("Last access \(summary.lastSeen.formatted(date: .abbreviated, time: .standard))")
           .foregroundStyle(.secondary)
+        if let revision = summary.latestDecisionRevision {
+          LabeledContent("Latest decision revision") {
+            Text(revisionText(revision))
+              .textSelection(.enabled)
+          }
+          .accessibilityRowValue(revisionText(revision))
+        }
       } header: {
         Text("Observed in This Policy")
       }
@@ -473,6 +595,14 @@ private struct ProgramDetails: View {
     }
   }
 
+  private func revisionText(_ revision: UInt64) -> String {
+    guard let current = summary.currentRevision else { return String(revision) }
+    if revision < current {
+      return String(localized: "\(revision) (current \(current))")
+    }
+    return revision == current ? String(localized: "\(revision) (current)") : String(revision)
+  }
+
   private var identityRows: [DetailRows.Row] {
     var rows: [DetailRows.Row] = []
     switch summary.identity {
@@ -487,7 +617,7 @@ private struct ProgramDetails: View {
     if let path = summary.executablePath {
       rows.append(.init(label: String(localized: "Executable"), value: path, isMonospaced: true))
     }
-    rows.append(.init(label: String(localized: "Process"), value: summary.processPreview))
+    rows.append(.init(label: String(localized: "Access Process"), value: summary.processPreview))
     return rows
   }
 }

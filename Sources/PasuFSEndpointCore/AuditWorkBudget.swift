@@ -1,10 +1,19 @@
 import Foundation
+import PasuFSConfiguration
 import os
 
 /// Accounts for retained payload estimates, not resident memory. Dedicated lanes
 /// cannot be borrowed by ordinary work. A reservation survives queue handoff.
+///
+/// Records of denied requests use only the denied lane, and no other record uses it, so a burst
+/// of allowed requests or process events cannot push denial evidence out of the queue and a burst
+/// of denied requests cannot push out other records.
 public final class AuditWorkBudget: Sendable {
-  enum Lane: Hashable, Sendable { case general, lifecycle, audit }
+  enum Lane: Hashable, Sendable {
+    case general, lifecycle, audit
+    /// Records of denied requests, and nothing else.
+    case denied
+  }
   struct Limit: Sendable {
     var entries: Int
     var bytes: Int
@@ -24,9 +33,18 @@ public final class AuditWorkBudget: Sendable {
   private let state = OSAllocatedUnfairLock(initialState: State())
   private let limits: [Lane: Limit]
 
-  public init(maximumEntries: Int = 1_024, maximumBytes: Int = 32 * 1_024 * 1_024) {
-    precondition(maximumEntries > 0 && maximumBytes > 0)
-    limits = [.general: Limit(entries: maximumEntries, bytes: maximumBytes)]
+  public static let deniedLaneEntries = 512
+  public static let deniedLaneBytes = 4 * 1_024 * 1_024
+
+  public init(
+    maximumEntries: Int = 1_024, maximumBytes: Int = 32 * 1_024 * 1_024,
+    deniedEntries: Int = deniedLaneEntries, deniedBytes: Int = deniedLaneBytes
+  ) {
+    precondition(maximumEntries > 0 && maximumBytes > 0 && deniedEntries > 0 && deniedBytes > 0)
+    limits = [
+      .general: Limit(entries: maximumEntries, bytes: maximumBytes),
+      .denied: Limit(entries: deniedEntries, bytes: deniedBytes),
+    ]
   }
 
   init(limits: [Lane: Limit]) {
@@ -39,6 +57,7 @@ public final class AuditWorkBudget: Sendable {
       .general: Limit(entries: 896, bytes: 28 * 1_024 * 1_024),
       .lifecycle: Limit(entries: 64, bytes: 1_024 * 1_024),
       .audit: Limit(entries: 64, bytes: 3 * 1_024 * 1_024),
+      .denied: Limit(entries: deniedLaneEntries, bytes: deniedLaneBytes),
     ])
   }
 
@@ -83,6 +102,8 @@ public final class AuditWorkBudget: Sendable {
     }
   }
 
+  func usage(of lane: Lane) -> Usage { state.withLock { $0.usage[lane, default: Usage()] } }
+
   final class Reservation: Sendable {
     private let budget: AuditWorkBudget
     private let id: UUID
@@ -126,5 +147,22 @@ public final class AuditWorkBudget: Sendable {
 
 protocol ReservedEndpointEventSink: EndpointEventSink {
   func record(_ event: EndpointEventRecord, reservation: AuditWorkBudget.Reservation)
-  func recordAdmissionDrop(_ event: EndpointEventRecord)
+  /// Counts a record that found no room in its lane. `actor` is the process instance that made
+  /// the request, when known.
+  func recordAdmissionDrop(_ event: EndpointEventRecord, actor: LineageProcessKey?)
+  /// Adds `event` to the request count of the open record it repeats, if there is one, and
+  /// reports whether it did. `actor` is the process instance that made the request.
+  func absorbRepeat(_ event: EndpointEventRecord, actor: LineageProcessKey?) -> Bool
+}
+
+extension EndpointEventRecord {
+  /// A record of a denied request: macOS was told to deny it, or a Protection policy decided to
+  /// deny it, such as when a failed response left the request to macOS.
+  var isDeniedRequest: Bool {
+    kernelResponse == "deny"
+      || (policyEvaluations ?? []).contains { $0.mode == .protection && $0.decision == .deny }
+  }
+
+  /// The lane a full record waits in before it is saved.
+  var auditLane: AuditWorkBudget.Lane { isDeniedRequest ? .denied : .general }
 }

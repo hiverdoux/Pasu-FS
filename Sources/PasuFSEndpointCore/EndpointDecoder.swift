@@ -12,6 +12,12 @@ public struct EndpointProcessSnapshot: Equatable, Sendable {
   public let isPlatformBinary: Bool
   public let isEndpointSecurityClient: Bool
 
+  public var executionProgram: ExecutionProgram {
+    ExecutionProgram(
+      facts: facts, executablePath: executablePath,
+      pathWasTruncated: executablePathWasTruncated)
+  }
+
   public init(
     facts: ProcessFacts,
     processID: Int32,
@@ -26,6 +32,17 @@ public struct EndpointProcessSnapshot: Equatable, Sendable {
     self.executablePathWasTruncated = executablePathWasTruncated
     self.isPlatformBinary = isPlatformBinary
     self.isEndpointSecurityClient = isEndpointSecurityClient
+  }
+}
+
+/// The location of a mounted file system: where it appears and what it was mounted from.
+public struct MountedVolume: Equatable, Sendable {
+  public let mountPoint: String
+  public let source: String?
+
+  public init(mountPoint: String, source: String?) {
+    self.mountPoint = mountPoint
+    self.source = source
   }
 }
 
@@ -52,8 +69,7 @@ public enum EndpointDecoder {
     case ES_EVENT_TYPE_NOTIFY_FORK: type = "NOTIFY_FORK"
     case ES_EVENT_TYPE_NOTIFY_EXEC: type = "NOTIFY_EXEC"
     case ES_EVENT_TYPE_NOTIFY_EXIT: type = "NOTIFY_EXIT"
-    case ES_EVENT_TYPE_AUTH_OPEN: type = "AUTH_OPEN"
-    default: type = "OTHER"
+    default: type = FileOperationKind(eventType: message.event_type)?.rawValue ?? "OTHER"
     }
     var result = LineageObservation(
       eventType: type, timestamp: timestamp,
@@ -129,12 +145,112 @@ public enum EndpointDecoder {
     )
   }
 
+  /// The paths of an authorization event, read from the fields Endpoint Security documents for
+  /// that event.
+  public static func fileOperation(
+    _ kind: FileOperationKind, event: es_events_t
+  ) -> FileOperationRequest {
+    switch kind {
+    case .open:
+      let open = event.open
+      return .open(file(open.file), flags: UInt32(bitPattern: open.fflag))
+    case .create:
+      let create = event.create
+      if create.destination_type == ES_DESTINATION_TYPE_EXISTING_FILE {
+        return .create(existing: file(create.destination.existing_file))
+      }
+      return .create(
+        in: file(create.destination.new_path.dir),
+        name: string(create.destination.new_path.filename)
+      )
+    case .rename:
+      let rename = event.rename
+      let destination: CheckedPath
+      if rename.destination_type == ES_DESTINATION_TYPE_EXISTING_FILE {
+        destination = CheckedPath(file(rename.destination.existing_file))
+      } else {
+        destination = CheckedPath(
+          directory: file(rename.destination.new_path.dir),
+          name: string(rename.destination.new_path.filename))
+      }
+      return .rename(
+        source: file(rename.source), destination: destination,
+        destinationIsExistingFile: rename.destination_type == ES_DESTINATION_TYPE_EXISTING_FILE)
+    case .unlink:
+      return .unlink(target: file(event.unlink.target))
+    case .link:
+      let link = event.link
+      return .link(
+        source: file(link.source), targetDirectory: file(link.target_dir),
+        name: string(link.target_filename))
+    case .clone:
+      let clone = event.clone
+      return .clone(
+        source: file(clone.source), targetDirectory: file(clone.target_dir),
+        name: string(clone.target_name))
+    case .copyFile:
+      let copy = event.copyfile
+      return .copyFile(
+        source: file(copy.source), existingTarget: copy.target_file.map { file($0) },
+        targetDirectory: file(copy.target_dir), name: string(copy.target_name))
+    case .truncate:
+      return .truncate(target: file(event.truncate.target))
+    case .exchangeData:
+      let exchange = event.exchangedata
+      return .exchangeData(file(exchange.file1), file(exchange.file2))
+    case .setMode:
+      return .metadataChange(kind, target: file(event.setmode.target))
+    case .setOwner:
+      return .metadataChange(kind, target: file(event.setowner.target))
+    case .setFlags:
+      return .metadataChange(kind, target: file(event.setflags.target))
+    case .setACL:
+      return .metadataChange(kind, target: file(event.setacl.target))
+    case .setExtendedAttribute:
+      return .metadataChange(kind, target: file(event.setextattr.target))
+    case .deleteExtendedAttribute:
+      return .metadataChange(kind, target: file(event.deleteextattr.target))
+    case .setAttributeList:
+      return .metadataChange(kind, target: file(event.setattrlist.target))
+    case .setTimes:
+      return .metadataChange(kind, target: file(event.utimes.target))
+    case .mount:
+      let volume = mountedVolume(event.mount.statfs)
+      return .mount(mountPoint: volume.mountPoint, volumeSource: volume.source)
+    }
+  }
+
+  /// The mount point and source of the file system an unmount notification names.
+  public static func unmountedVolume(_ event: es_events_t) -> MountedVolume {
+    mountedVolume(event.unmount.statfs)
+  }
+
+  /// `f_mntonname` and `f_mntfromname` of a `statfs` record, as the kernel spelled them.
+  public static func mountedVolume(_ pointer: UnsafePointer<statfs>) -> MountedVolume {
+    var record = pointer.pointee
+    let mountPoint = withUnsafePointer(to: &record.f_mntonname) {
+      $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
+    }
+    let source = withUnsafePointer(to: &record.f_mntfromname) {
+      $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
+    }
+    return MountedVolume(mountPoint: mountPoint, source: source.isEmpty ? nil : source)
+  }
+
+  /// `messageVersion` decides whether the start time (version 3 and later) and the parent's
+  /// audit token (version 4 and later) are reported.
   public static func process(
-    _ pointer: UnsafePointer<es_process_t>
+    _ pointer: UnsafePointer<es_process_t>, messageVersion: UInt32 = 0
   ) throws -> EndpointProcessSnapshot {
     let process = pointer.pointee
     let executable = file(UnsafePointer(process.executable))
     let processID = audit_token_to_pid(process.audit_token)
+    let parentID = messageVersion >= 4 ? audit_token_to_pid(process.parent_audit_token) : 0
+    let startTime =
+      messageVersion >= 3 && process.start_time.tv_sec > 0
+      ? Date(
+        timeIntervalSince1970: Double(process.start_time.tv_sec)
+          + Double(process.start_time.tv_usec) / 1_000_000) : nil
     let facts = ProcessFacts(
       auditToken: try auditTokenKey(process.audit_token),
       processInstance: ProcessInstanceKey(
@@ -144,7 +260,15 @@ public enum EndpointDecoder {
       teamIdentifier: string(process.team_id),
       signingIdentifier: string(process.signing_id),
       isPlatformBinary: process.is_platform_binary,
-      codeSigningFlags: process.codesigning_flags
+      codeSigningFlags: process.codesigning_flags,
+      effectiveUserID: audit_token_to_euid(process.audit_token),
+      originalParentProcessID: process.original_ppid,
+      parentProcessInstance: parentID > 0
+        ? ProcessInstanceKey(
+          processID: parentID,
+          processVersion: Int32(audit_token_to_pidversion(process.parent_audit_token))) : nil,
+      parentEffectiveUserID: parentID > 0 ? audit_token_to_euid(process.parent_audit_token) : nil,
+      startTime: startTime
     )
 
     return EndpointProcessSnapshot(

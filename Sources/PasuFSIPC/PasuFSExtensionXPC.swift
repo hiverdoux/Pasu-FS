@@ -12,13 +12,6 @@ public protocol PasuFSExtensionXPCProtocol: NSObjectProtocol {
   func handshake(_ requestData: Data, withReply reply: @escaping (Data?, NSError?) -> Void)
   func applyPolicy(_ policyData: Data, withReply reply: @escaping (Data?, NSError?) -> Void)
   func queryPolicy(withReply reply: @escaping (Data?, NSError?) -> Void)
-  func applySystemCompatibilitySettings(
-    _ settingsData: Data,
-    withReply reply: @escaping (Data?, NSError?) -> Void
-  )
-  func querySystemCompatibilityState(
-    withReply reply: @escaping (Data?, NSError?) -> Void
-  )
   func queryStatus(withReply reply: @escaping (Data?, NSError?) -> Void)
   func readAuditLog(
     _ maximumLineCount: NSNumber,
@@ -37,7 +30,11 @@ public enum PasuFSXPCErrorCode: Int {
   case policyRejected = 4
   case internalFailure = 5
   case timeout = 6
-  case systemCompatibilitySettingsRejected = 7
+  // 7 rejected the separate compatibility settings of earlier versions; it is not reused.
+  /// A change that reduces protection arrived without a valid administrator authorization.
+  case authorizationRequired = 8
+  /// The user canceled the administrator password dialog; nothing was changed.
+  case authorizationCanceled = 9
 }
 
 public enum PasuFSXPCError {

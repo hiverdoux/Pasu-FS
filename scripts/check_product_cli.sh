@@ -29,6 +29,11 @@ check_help "$cli" -h
 check_invalid "$cli"
 check_invalid "$cli" --invalid
 check_invalid "$cli" --status extra
+# The app's internal installation state command takes exactly its two arguments.
+check_invalid "$cli" --installation-states
+check_invalid "$cli" --json
+check_invalid "$cli" --installation-states --json extra
+check_invalid "$cli" --json --installation-states
 check_invalid "$cli" '--help --activate'
 check_invalid "$cli" --help --activate
 

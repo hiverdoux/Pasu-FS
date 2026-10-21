@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The observed chain from the oldest known ancestor to the process that opened the file, as
 /// rows of a form section.
-struct ExecutionPathView: View {
+struct ProcessChainView: View {
   let record: AuditEventRecord
 
   var body: some View {
@@ -13,7 +13,7 @@ struct ExecutionPathView: View {
         ProcessLineageDetails(snapshot: lineage)
       }
     } else {
-      Text("This record does not include process history.")
+      Text("This record does not include process lineage.")
         .foregroundStyle(.secondary)
     }
   }
@@ -48,7 +48,7 @@ private struct ProcessChain: View {
 
   private func role(of process: LineageProcess) -> String {
     if process.key == snapshot.actor {
-      return String(localized: "Opened the file · PID \(String(process.key.pid))")
+      return String(localized: "Access process · PID \(String(process.key.pid))")
     }
     if process.key == snapshot.responsible {
       return String(localized: "Responsible process · PID \(String(process.key.pid))")
@@ -115,7 +115,7 @@ struct ProcessLineageDetails: View {
         processView(process)
       }
       if snapshot.processes.contains(where: { !ancestry.contains($0.key) }) {
-        Text("Responsibility outside the process’s ancestors")
+        Text("Responsible processes outside the ancestor chain")
           .font(.headline)
         ForEach(snapshot.processes.filter { !ancestry.contains($0.key) }) { process in
           processView(process)
@@ -131,7 +131,7 @@ struct ProcessLineageDetails: View {
       Text(process.displayName)
         .font(.headline)
       if process.key == snapshot.actor {
-        Text("Opened the file")
+        Text("Access Process")
       }
       if process.key == snapshot.responsible {
         Text("Responsible process reported by macOS")
@@ -201,12 +201,9 @@ struct ProcessLineageDetails: View {
   }
 
   private func issueView(_ issue: LineageIssue) -> some View {
-    Text(
-      issue.count > 1
-        ? "\(LineageText.explanation(issue)) (\(issue.count))" : LineageText.explanation(issue)
-    )
-    .foregroundStyle(.orange)
-    .textSelection(.enabled)
+    Text(LineageText.text(issue, alwaysShowingCount: false))
+      .foregroundStyle(.orange)
+      .textSelection(.enabled)
   }
 
   private func name(_ key: LineageProcessKey) -> String {

@@ -1,9 +1,12 @@
 import Foundation
 
-// Compares the strings the compiler found in the app with the String Catalogs, and checks that
-// the installer pages and messages exist in every language.
-// Usage: swift check_localization.swift STRINGSDATA_DIRECTORY
-// The directory comes from building with `-emit-localized-strings`.
+// Compares the strings the compiler found in the app with the String Catalogs, checks that the
+// installer pages and messages exist in every language, and that Korean text doesn't offer both
+// forms of a particle, as in "%@을(를)".
+// Usage, from the repository root: swift scripts/check_localization.swift STRINGSDATA_DIRECTORY
+// The catalog, source and installer paths below are relative to the current directory, so the
+// check must run from the root. scripts/check_source.sh does this and supplies the directory,
+// which comes from building with `-emit-localized-strings`.
 
 struct CheckError: Error, CustomStringConvertible {
   let description: String
@@ -68,9 +71,34 @@ func isTranslated(_ localization: Any?) -> Bool {
   return false
 }
 
+/// The values of a localization, including every variation.
+func values(_ localization: Any?) -> [String] {
+  guard let localization = localization as? [String: Any] else { return [] }
+  var found: [String] = []
+  if let unit = localization["stringUnit"] as? [String: Any], let value = unit["value"] as? String {
+    found.append(value)
+  }
+  if let variations = localization["variations"] as? [String: Any] {
+    for cases in variations.values {
+      for item in (cases as? [String: Any] ?? [:]).values {
+        found += values(item)
+      }
+    }
+  }
+  return found
+}
+
+/// A Korean particle's form depends on the sound before it. Text that offers both forms reads as
+/// unfinished, so a sentence is written to need no particle after a value.
+let pairedKoreanParticles = [
+  "을(를)", "를(을)", "이(가)", "가(이)", "은(는)", "는(은)", "와(과)", "과(와)", "(으)로", "(이)라",
+]
+
 do {
   guard CommandLine.arguments.count == 2 else {
-    throw CheckError("Usage: swift check_localization.swift STRINGSDATA_DIRECTORY")
+    throw CheckError(
+      "Usage, from the repository root: "
+        + "swift scripts/check_localization.swift STRINGSDATA_DIRECTORY")
   }
   let root = FileManager.default.currentDirectoryPath
   let sourceDirectory = URL(fileURLWithPath: appSources, relativeTo: URL(fileURLWithPath: root))
@@ -120,6 +148,13 @@ do {
     let localizations = entry["localizations"] as? [String: Any] ?? [:]
     for language in requiredLanguages where !isTranslated(localizations[language]) {
       problems.append("\(appCatalog): no \(language) translation for “\(key)”")
+    }
+  }
+  for (key, entry) in catalog.sorted(by: { $0.key < $1.key }) {
+    let localizations = entry["localizations"] as? [String: Any] ?? [:]
+    for value in values(localizations["ko"])
+    where pairedKoreanParticles.contains(where: value.contains) {
+      problems.append("\(appCatalog): the ko value for “\(key)” offers both forms of a particle")
     }
   }
   for (key, entry) in catalog.sorted(by: { $0.key < $1.key }) where !codeKeys.contains(key) {

@@ -4,10 +4,18 @@ import SwiftUI
 
 struct RootView: View {
   @Bindable var model: AppModel
+  /// Follows `model.showsOnboarding`, but turns on only after the window ended text editing.
+  @State private var showsOnboarding: Bool
+  @State private var window = WindowReference()
+
+  init(model: AppModel) {
+    self.model = model
+    _showsOnboarding = State(initialValue: model.showsOnboarding)
+  }
 
   var body: some View {
     Group {
-      if model.showsOnboarding {
+      if showsOnboarding {
         OnboardingView(model: model)
       } else {
         NavigationSplitView {
@@ -25,6 +33,22 @@ struct RootView: View {
             .id(id)
           }
         }
+      }
+    }
+    .background(WindowReader(reference: window))
+    .onChange(of: model.showsOnboarding) { _, shows in
+      guard shows else {
+        showsOnboarding = false
+        return
+      }
+      // The setup assistant has no toolbar items, so SwiftUI removes the window's toolbar. When
+      // that removal ends editing in the toolbar search field, an input method such as Korean
+      // waits for its server in a nested run loop, where SwiftUI can start a second toolbar
+      // update; on macOS 27.2 that update raised an exception and ended the app. Editing ends
+      // first, while the toolbar stays, and the screen changes in a later turn of the main loop.
+      Task { @MainActor in
+        window.window?.endTextEditing()
+        showsOnboarding = model.showsOnboarding
       }
     }
     .sheet(
@@ -46,6 +70,16 @@ struct RootView: View {
         model.isPresentingUninstall = true
       }
     }
+  }
+}
+
+extension NSWindow {
+  /// Ends text editing in the window, as clicking outside a text field does, and returns
+  /// whether a text view was editing.
+  @discardableResult
+  func endTextEditing() -> Bool {
+    guard firstResponder is NSText else { return false }
+    return makeFirstResponder(nil)
   }
 }
 

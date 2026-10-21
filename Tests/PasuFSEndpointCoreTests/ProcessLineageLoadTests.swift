@@ -10,7 +10,8 @@ final class ProcessLineageLoadTests: XCTestCase {
   /// history disabled/enabled. This is not a measurement of kernel deadlines.
   func testNormalLoadHasIdenticalDecisionsAndNoDroppedRecords() throws {
     for enabled in [false, true] {
-      let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+      let root = PhysicalPath.resolve(
+        FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
       let protected = root.appendingPathComponent("protected")
       try FileManager.default.createDirectory(at: protected, withIntermediateDirectories: true)
       defer { try? FileManager.default.removeItem(at: root) }

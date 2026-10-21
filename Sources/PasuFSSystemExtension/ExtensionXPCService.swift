@@ -70,19 +70,6 @@ private final class ExtensionXPCHandler: NSObject, PasuFSExtensionXPCProtocol, @
     runtime.queryPolicy(reply: reply)
   }
 
-  func applySystemCompatibilitySettings(
-    _ settingsData: Data,
-    withReply reply: @escaping (Data?, NSError?) -> Void
-  ) {
-    runtime.applySystemCompatibilitySettings(settingsData, reply: reply)
-  }
-
-  func querySystemCompatibilityState(
-    withReply reply: @escaping (Data?, NSError?) -> Void
-  ) {
-    runtime.querySystemCompatibilityState(reply: reply)
-  }
-
   func queryStatus(withReply reply: @escaping (Data?, NSError?) -> Void) {
     runtime.queryStatus(reply: reply)
   }

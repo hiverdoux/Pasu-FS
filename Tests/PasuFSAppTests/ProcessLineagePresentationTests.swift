@@ -44,7 +44,7 @@ final class ProcessLineagePresentationTests: XCTestCase {
   func testLegacyRecordRemainsReadableWithoutFabricatedLineage() throws {
     let data = Data(
       """
-      {"schemaVersion":4,"timestamp":"2026-09-13T00:00:00Z","eventType":"AUTH_OPEN",
+      {"schemaVersion":4,"timestamp":"2027-01-15T08:00:00Z","eventType":"AUTH_OPEN",
        "processID":2,"executablePath":"/example/cat","policyDecision":"allowed","kernelResponse":"allow"}
       """.utf8)
     let decoder = JSONDecoder()

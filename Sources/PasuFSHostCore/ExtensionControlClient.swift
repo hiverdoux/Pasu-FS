@@ -8,6 +8,7 @@ public enum ExtensionControlClientError: Error, CustomStringConvertible, Sendabl
   case handshakeMismatch
   case configurationProtocolMismatch(expected: Int, actual: Int)
   case requestTimedOut
+  case connectionInterrupted
   case policyAuditLogUnsupported
 
   public var description: String {
@@ -22,6 +23,8 @@ public enum ExtensionControlClientError: Error, CustomStringConvertible, Sendabl
       "The host requires configuration protocol \(expected), but the extension reported \(actual)."
     case .requestTimedOut:
       "The Endpoint Security extension did not reply before the timeout."
+    case .connectionInterrupted:
+      "The connection to the Endpoint Security extension was interrupted before it replied."
     case .policyAuditLogUnsupported:
       "The running protection extension does not support policy logs. Update the extension to view this tab."
     }
@@ -29,13 +32,16 @@ public enum ExtensionControlClientError: Error, CustomStringConvertible, Sendabl
 }
 
 public protocol ExtensionRuntimeControlling: Sendable {
-  func applyPolicySet(_ document: PolicySetDocument) async throws -> PolicyApplyReceipt
+  /// Stores a policy set. `authorization` is the external form of a fresh administrator
+  /// authorization session; the extension requires one for a change that reduces
+  /// protection and shows the macOS password dialog while it verifies it.
+  /// `savedPolicyIdentifier` names the policy the user saved, whose retired folder paths the
+  /// extension releases once the set is stored.
+  func applyPolicySet(
+    _ document: PolicySetDocument, authorization: Data?, savedPolicyIdentifier: UUID?
+  ) async throws -> PolicyApplyReceipt
   func queryStatus() async throws -> ExtensionStatusSnapshot
   func queryPolicySet() async throws -> PolicySetDocument
-  func applySystemCompatibilitySettings(
-    _ document: SystemCompatibilitySettingsDocument
-  ) async throws -> SystemCompatibilitySettingsApplyReceipt
-  func querySystemCompatibilityState() async throws -> SystemCompatibilityStateSnapshot
   func readAuditLog(maximumLineCount: Int) async throws -> AuditLogBatch
   func readPolicyAuditLog(
     setIdentifier: UUID, policyIdentifier: UUID, maximumLineCount: Int
@@ -52,28 +58,39 @@ extension ExtensionRuntimeControlling {
 }
 
 public actor ExtensionControlClient: ExtensionRuntimeControlling {
+  /// How long a save that carries an administrator authorization may wait for the dialog.
+  public static let authorizationTimeout: TimeInterval = 600
+
   private let hostBundleURL: URL
   private let requestTimeout: TimeInterval
-  private let systemCompatibilityCatalogDigest: String
   private var connection: NSXPCConnection?
   private var isAuthenticated = false
   private var supportsPolicyAuditLog = false
+  /// Requests waiting for a reply; a lost connection fails them at once instead of leaving
+  /// them to their timeout.
+  private var pendingReplies: [ObjectIdentifier: XPCReplyGate] = [:]
 
   public init(
     hostBundleURL: URL = Bundle.main.bundleURL,
-    requestTimeout: TimeInterval = 5,
-    systemCompatibilityCatalog: SystemCompatibilityCatalog =
-      BuiltInSystemCompatibilityCatalog.catalog
+    requestTimeout: TimeInterval = 5
   ) {
     self.hostBundleURL = hostBundleURL.standardizedFileURL
     self.requestTimeout = requestTimeout
-    self.systemCompatibilityCatalogDigest =
-      (try? systemCompatibilityCatalog.catalogDigest()) ?? ""
   }
 
-  public func applyPolicySet(_ document: PolicySetDocument) async throws -> PolicyApplyReceipt {
-    let data = try PolicySetDocumentCodec.encode(document)
-    return try await request(PolicyApplyReceipt.self) { proxy, reply in
+  public func applyPolicySet(
+    _ document: PolicySetDocument, authorization: Data? = nil, savedPolicyIdentifier: UUID? = nil
+  ) async throws -> PolicyApplyReceipt {
+    let data = try XPCJSONCodec.encode(
+      PolicyApplyRequest(
+        policySetData: try PolicySetDocumentCodec.encode(document),
+        authorization: authorization,
+        savedPolicyIdentifier: savedPolicyIdentifier
+      )
+    )
+    // With an authorization, the extension waits for the user's answer to the password dialog.
+    let timeout = authorization == nil ? requestTimeout : Self.authorizationTimeout
+    return try await request(PolicyApplyReceipt.self, timeout: timeout) { proxy, reply in
       proxy.applyPolicy(data, withReply: reply)
     }
   }
@@ -92,29 +109,6 @@ public actor ExtensionControlClient: ExtensionRuntimeControlling {
     return try PolicySetDocumentCodec.decode(data)
   }
 
-  public func applySystemCompatibilitySettings(
-    _ document: SystemCompatibilitySettingsDocument
-  ) async throws -> SystemCompatibilitySettingsApplyReceipt {
-    let settingsData = try SystemCompatibilitySettingsCodec.encode(document)
-    let data = try XPCJSONCodec.encode(
-      SystemCompatibilitySettingsApplyRequest(
-        catalogDigest: systemCompatibilityCatalogDigest,
-        settingsData: settingsData
-      )
-    )
-    return try await request(SystemCompatibilitySettingsApplyReceipt.self) { proxy, reply in
-      proxy.applySystemCompatibilitySettings(data, withReply: reply)
-    }
-  }
-
-  public func querySystemCompatibilityState() async throws
-    -> SystemCompatibilityStateSnapshot
-  {
-    try await request(SystemCompatibilityStateSnapshot.self) { proxy, reply in
-      proxy.querySystemCompatibilityState(withReply: reply)
-    }
-  }
-
   public func readAuditLog(maximumLineCount: Int = 500) async throws -> AuditLogBatch {
     try await request(AuditLogBatch.self) { proxy, reply in
       proxy.readAuditLog(NSNumber(value: maximumLineCount), withReply: reply)
@@ -126,6 +120,11 @@ public actor ExtensionControlClient: ExtensionRuntimeControlling {
     connection = nil
     isAuthenticated = false
     supportsPolicyAuditLog = false
+    let interrupted = pendingReplies.values
+    pendingReplies = [:]
+    for gate in interrupted {
+      gate.resume(throwing: ExtensionControlClientError.connectionInterrupted)
+    }
   }
 
   public func readPolicyAuditLog(
@@ -154,11 +153,12 @@ public actor ExtensionControlClient: ExtensionRuntimeControlling {
 
   private func request<T: Decodable>(
     _ type: T.Type,
+    timeout: TimeInterval? = nil,
     invocation: (PasuFSExtensionXPCProtocol, @escaping (Data?, NSError?) -> Void) -> Void
   ) async throws -> T {
     let proxy = try await authenticatedProxy()
     do {
-      let data = try await requestData { reply in
+      let data = try await requestData(timeout: timeout) { reply in
         invocation(proxy, reply)
       }
       return try XPCJSONCodec.decode(type, from: data)
@@ -235,11 +235,15 @@ public actor ExtensionControlClient: ExtensionRuntimeControlling {
   }
 
   private func requestData(
+    timeout: TimeInterval? = nil,
     invocation: (@escaping (Data?, NSError?) -> Void) -> Void
   ) async throws -> Data {
-    try await withCheckedThrowingContinuation { continuation in
-      let gate = XPCReplyGate(continuation)
-      DispatchQueue.global().asyncAfter(deadline: .now() + requestTimeout) {
+    let gate = XPCReplyGate()
+    pendingReplies[ObjectIdentifier(gate)] = gate
+    defer { pendingReplies.removeValue(forKey: ObjectIdentifier(gate)) }
+    return try await withCheckedThrowingContinuation { continuation in
+      gate.start(continuation)
+      DispatchQueue.global().asyncAfter(deadline: .now() + (timeout ?? requestTimeout)) {
         gate.resume(throwing: ExtensionControlClientError.requestTimedOut)
       }
       invocation { data, error in
@@ -259,7 +263,17 @@ final class XPCReplyGate: @unchecked Sendable {
   private let lock = NSLock()
   private var continuation: CheckedContinuation<Data, any Error>?
 
-  init(_ continuation: CheckedContinuation<Data, any Error>) {
+  init() {}
+
+  convenience init(_ continuation: CheckedContinuation<Data, any Error>) {
+    self.init()
+    start(continuation)
+  }
+
+  /// The gate forwards the first result it receives after this call and drops the others.
+  func start(_ continuation: CheckedContinuation<Data, any Error>) {
+    lock.lock()
+    defer { lock.unlock() }
     self.continuation = continuation
   }
 

@@ -48,7 +48,7 @@ final class AppModelPolicyTests: XCTestCase {
     XCTAssertEqual(model.policyDraft(id: firstID)?.protectedRootPath, "/Users/example/First")
     XCTAssertEqual(model.sidebarPolicies.count, 2)
     XCTAssertEqual(model.policyDraft(id: secondID)?.mode, .audit)
-    XCTAssertEqual(model.policyDraft(id: secondID)?.policyType, .whitelist)
+    XCTAssertEqual(model.policyDraft(id: secondID)?.isBlacklistEnabled, false)
     XCTAssertEqual(model.policyDraft(id: secondID)?.protectedRootPath, "")
     XCTAssertEqual(model.pendingFolderEntryPolicyID, secondID)
   }
@@ -104,25 +104,27 @@ final class AppModelPolicyTests: XCTestCase {
     XCTAssertNoThrow(try candidate.validate())
   }
 
-  func testTypeChangeCanPreserveOrDeleteRulesAndRevertRestoresActivePolicy() {
+  func testAllowListSwitchPreservesSeparateListsAndRevertRestoresActivePolicy() {
     let active = makePolicySet()
     let model = AppModel(initialPolicySet: active)
     let policyID = active.policies[0].id
+    let allowRules = active.policies[0].allowRules
 
-    model.applyPolicyTypeChange(
-      policyID: policyID,
-      to: .blacklist,
-      deletingAllRules: false
-    )
-    XCTAssertEqual(model.policyDraft(id: policyID)?.policyType, .blacklist)
-    XCTAssertEqual(model.policyDraft(id: policyID)?.rules.count, 1)
+    model.setAllowListInUse(policyID: policyID, false)
+    XCTAssertEqual(model.policyDraft(id: policyID)?.isBlacklistEnabled, true)
+    XCTAssertEqual(model.policyDraft(id: policyID)?.allowRules, allowRules)
+    XCTAssertEqual(model.policyDraft(id: policyID)?.denyRules, [])
+    XCTAssertEqual(model.policyDraft(id: policyID)?.uses(.allow), false)
 
-    model.applyPolicyTypeChange(
-      policyID: policyID,
-      to: .whitelist,
-      deletingAllRules: true
-    )
-    XCTAssertTrue(model.policyDraft(id: policyID)?.rules.isEmpty == true)
+    model.setAllowListInUse(policyID: policyID, true)
+    XCTAssertEqual(model.policyDraft(id: policyID)?.allowRules, allowRules)
+    XCTAssertFalse(model.isPolicyDirty(policyID))
+
+    // Removing the last allow rule leaves an empty allow list in use; it does not turn the
+    // allow list off.
+    model.removeRule(policyID: policyID, ruleID: allowRules[0].id)
+    XCTAssertEqual(model.policyDraft(id: policyID)?.allowRules, [])
+    XCTAssertEqual(model.policyDraft(id: policyID)?.isBlacklistEnabled, false)
 
     model.revertPolicy(id: policyID)
     XCTAssertEqual(
@@ -189,48 +191,36 @@ final class AppModelPolicyTests: XCTestCase {
     XCTAssertEqual(candidate.observationCount, 2)
     XCTAssertEqual(candidate.lastSeen, Date(timeIntervalSince1970: 20))
 
-    XCTAssertTrue(model.policyContainsIdentity(policyID: policyID, candidate: candidate))
-    XCTAssertThrowsError(try model.addRule(policyID: policyID, from: candidate))
+    XCTAssertTrue(
+      model.policyContainsIdentity(policyID: policyID, list: .allow, candidate: candidate))
+    XCTAssertThrowsError(try model.addRule(policyID: policyID, to: .allow, from: candidate))
+    XCTAssertFalse(
+      model.policyContainsIdentity(policyID: policyID, list: .deny, candidate: candidate))
   }
 
-  func testSystemCompatibilityCatalogStaysSeparateFromPolicyDrafts() throws {
+  func testAFollowedFolderReplacesTheOldPathInAnUnsavedDraft() throws {
     let active = makePolicySet()
-    let profile = SystemCompatibilityProfile(
-      id: "system.example.read",
-      displayName: "Example system feature",
-      roleDescription: "Reads files for one verified operating-system feature.",
-      consequence: "The operating system may retain a derived copy.",
-      evidence: SystemCompatibilityProfileEvidence(
-        capabilityClass: .singlePurposeAutonomousService,
-        acceptsArbitraryThirdPartyCommandsOrPaths: false,
-        observedOSBuilds: ["23A000"],
-        observedDate: "2026-08-27",
-        evidenceReference: "docs/experiments/example-system-profile.md",
-        capabilityAssessment: "Synthetic evidence used only by unit tests."
-      ),
-      actors: [
-        SystemCompatibilityProfileActor(
-          signingIdentifier: "com.apple.example.worker",
-          allowedOpenFlags: UInt32(FREAD),
-          supportedOSRange: SystemCompatibilityOSRange(
-            minimum: SystemCompatibilityOSVersion(major: 14),
-            maximumExclusive: SystemCompatibilityOSVersion(major: 15)
-          ),
-          supportedOSBuilds: ["23A000"]
-        )
-      ]
-    )
-    let model = AppModel(
-      initialPolicySet: active,
-      systemCompatibilityCatalog: SystemCompatibilityCatalog(profiles: [profile])
-    )
-    let policyID = active.policies[0].id
+    let model = AppModel(initialPolicySet: active)
+    let firstID = active.policies[0].id
+    let secondID = active.policies[1].id
+    model.updatePolicyDraft(id: firstID) { $0.name = "Renamed First" }
+    model.updatePolicyDraft(id: secondID) { $0.protectedRootPath = "/Users/example/Chosen" }
 
-    let items = model.systemCompatibilityProfileItems(policyID: policyID)
-    XCTAssertEqual(items.map(\.profile.id), [profile.id])
-    XCTAssertEqual(items.map(\.state), [.disabled])
-    XCTAssertFalse(model.isPolicyDirty(policyID))
-    XCTAssertEqual(model.activePolicy(id: policyID), active.policies[0])
+    // The extension followed both folders and stored the next revision.
+    let followed = try active.movingFolders([
+      firstID: "/Users/example/Moved/First", secondID: "/Users/example/Moved/Second",
+    ])
+    model.installActivePolicySet(followed)
+    // A draft that kept the old folder takes the new one and keeps its other changes.
+    XCTAssertEqual(model.policyDraft(id: firstID)?.protectedRootPath, "/Users/example/Moved/First")
+    XCTAssertEqual(model.policyDraft(id: firstID)?.name, "Renamed First")
+    XCTAssertTrue(model.isPolicyDirty(firstID))
+    // A draft that chose another folder keeps the choice.
+    XCTAssertEqual(model.policyDraft(id: secondID)?.protectedRootPath, "/Users/example/Chosen")
+    let candidate = try model.candidateDocument(
+      replacing: firstID, with: model.policyDraft(id: firstID))
+    XCTAssertEqual(candidate.revision, followed.revision + 1)
+    XCTAssertEqual(candidate.policies[0].protectedRootPath, "/Users/example/Moved/First")
   }
 
   private func makePolicySet() -> PolicySetDocument {

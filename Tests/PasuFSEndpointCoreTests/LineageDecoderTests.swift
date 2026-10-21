@@ -57,4 +57,40 @@ final class LineageDecoderTests: XCTestCase {
       }
     }
   }
+
+  /// The facts a history can begin with when launchd started a process before observation:
+  /// the start time from version 3 and the current parent from version 4.
+  func testProcessFactsCarryTheStartTimeAndTheCurrentParentByMessageVersion() throws {
+    var file = es_file_t()
+    try withUnsafeMutablePointer(to: &file) { filePointer in
+      let rawProcess = UnsafeMutablePointer<es_process_t>.allocate(capacity: 1)
+      defer { rawProcess.deallocate() }
+      memset(rawProcess, 0, MemoryLayout<es_process_t>.stride)
+      rawProcess.pointee.executable = filePointer
+      rawProcess.pointee.audit_token = audit_token_t(val: (0, 0, 0, 0, 0, 20, 0, 7))
+      rawProcess.pointee.parent_audit_token = audit_token_t(val: (0, 0, 0, 0, 0, 1, 0, 3))
+      rawProcess.pointee.start_time = timeval(tv_sec: 1_800_000_000, tv_usec: 250_000)
+      rawProcess.pointee.original_ppid = 1
+      rawProcess.pointee.ppid = 1
+
+      let old = try EndpointDecoder.process(rawProcess, messageVersion: 2)
+      XCTAssertNil(old.facts.startTime)
+      XCTAssertNil(old.facts.parentProcessInstance)
+      XCTAssertNil(old.executionProgram.parentProcessID)
+      XCTAssertEqual(old.executionProgram.originalParentProcessID, 1)
+
+      let intermediate = try EndpointDecoder.process(rawProcess, messageVersion: 3)
+      XCTAssertEqual(
+        intermediate.facts.startTime, Date(timeIntervalSince1970: 1_800_000_000.25))
+      XCTAssertNil(intermediate.executionProgram.parentProcessID)
+
+      let current = try EndpointDecoder.process(rawProcess, messageVersion: 4)
+      XCTAssertEqual(current.executionProgram.parentProcessID, 1)
+      XCTAssertEqual(current.executionProgram.startTime, intermediate.facts.startTime)
+
+      // A start time the kernel left empty is not reported as the epoch.
+      rawProcess.pointee.start_time = timeval()
+      XCTAssertNil(try EndpointDecoder.process(rawProcess, messageVersion: 4).facts.startTime)
+    }
+  }
 }

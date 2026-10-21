@@ -10,9 +10,8 @@ struct PolicyView: View {
   @State private var tab: PolicyEditorTab
   @State private var isChoosingFolder = false
   @State private var isConfirmingDelete = false
-  @State private var pendingTypeChange: PolicyTypeChangeRequest?
-  @State private var isConfirmingProtection = false
-  @State private var editingRule: PolicyRule?
+  @State private var editingRule: RuleEditRequest?
+  @AppStorage(ProgramSortOrder.defaultsKey) private var sortOrder = ProgramSortOrder.default
 
   init(model: AppModel, policyID: UUID, initialTab: PolicyEditorTab = .settings) {
     self.model = model
@@ -31,9 +30,7 @@ struct PolicyView: View {
       case .settings:
         settingsForm(draft)
       case .log:
-        PolicyLogView(model: model, policyID: policyID) {
-          isConfirmingProtection = true
-        }
+        PolicyLogView(model: model, policyID: policyID)
       }
     } else {
       ContentUnavailableView(
@@ -68,7 +65,7 @@ struct PolicyView: View {
           .pickerStyle(.segmented)
         }
       }
-      .toolbarGroups(isShown: isDirty) {
+      .toolbarGroups(isShown: needsSaving) {
         ToolbarItem {
           Button("Revert") {
             model.revertPolicy(id: policyID)
@@ -86,6 +83,8 @@ struct PolicyView: View {
         \.policyCommands,
         PolicyCommandActions(
           save: canSave ? { save() } : nil,
+          saveNeedsAuthorization: saveNeedsAuthorization,
+          duplicate: canDuplicate ? { model.duplicatePolicy(id: policyID) } : nil,
           revert: canRevert ? { model.revertPolicy(id: policyID) } : nil,
           showInFinder: folderPath == nil ? nil : { revealFolder() }
         ))
@@ -93,23 +92,6 @@ struct PolicyView: View {
 
   private func presentingDialogs(_ view: some View) -> some View {
     view
-      .alert(
-        typeChangeTitle,
-        isPresented: typeChangeIsPresented,
-        presenting: pendingTypeChange
-      ) { request in
-        Button("Keep Rules and Change") {
-          apply(request, deletingAllRules: false)
-        }
-        Button("Delete All Rules and Change", role: .destructive) {
-          apply(request, deletingAllRules: true)
-        }
-        Button("Cancel", role: .cancel) {
-          pendingTypeChange = nil
-        }
-      } message: { request in
-        Text(typeChangeMessage(request))
-      }
       .confirmationDialog(
         "Delete this policy?",
         isPresented: $isConfirmingDelete,
@@ -126,22 +108,10 @@ struct PolicyView: View {
 
   private func presentingSheets(_ view: some View) -> some View {
     view
-      .alert("Switch to Protection?", isPresented: $isConfirmingProtection) {
-        Button("Switch and Save") {
-          Task { await model.switchToProtection(policyID: policyID) }
-        }
-        Button("Cancel", role: .cancel) {}
-      } message: {
-        Text(protectionSwitchMessage)
+      .sheet(item: $editingRule) { request in
+        AddProgramSheet(
+          model: model, policyID: policyID, list: request.list, editing: request.rule)
       }
-      .sheet(item: $editingRule) { rule in
-        AddProgramSheet(model: model, policyID: policyID, editing: rule)
-      }
-  }
-
-  private var typeChangeTitle: String {
-    guard let request = pendingTypeChange else { return "" }
-    return String(localized: "Change to \(request.targetType.displayName)?")
   }
 
   private var deleteMessage: String {
@@ -167,10 +137,16 @@ struct PolicyView: View {
       Section {
         TextField("Name", text: nameBinding, prompt: Text("Policy name"))
         folderRow(draft)
+        if !retiredPaths.isEmpty {
+          retiredPathsRow
+        }
       }
       behaviorSection(draft)
-      rulesSection(draft)
-      compatibilitySection(draft)
+      rulesSection(draft, list: .allow)
+      rulesSection(draft, list: .deny)
+      if model.supportsSystemCompatibilityProfiles || !draft.systemCompatibilityProfiles.isEmpty {
+        compatibilitySection(draft)
+      }
       Section {
         Button("Delete Policy…", role: .destructive) {
           isConfirmingDelete = true
@@ -210,6 +186,30 @@ struct PolicyView: View {
     }
   }
 
+  /// The folder's former paths that stay reserved for the allowed programs until the policy
+  /// is saved.
+  private var retiredPathsRow: some View {
+    LabeledContent {
+      VStack(alignment: .trailing) {
+        ForEach(retiredPaths, id: \.self) { path in
+          Text(PathText.abbreviated(path))
+            .help(path)
+            .textSelection(.enabled)
+        }
+      }
+    } label: {
+      if retiredPaths.count == 1 {
+        Text("Retired Path")
+        Text("Saving the policy releases it.")
+      } else {
+        Text("Retired Paths")
+        Text("Saving the policy releases them.")
+      }
+    }
+  }
+
+  private var retiredPaths: [String] { model.retiredFolderPaths(policyID: policyID) }
+
   private func behaviorSection(_ draft: DirectoryPolicyDraft) -> some View {
     Section {
       LabeledContent {
@@ -223,125 +223,165 @@ struct PolicyView: View {
       } label: {
         Text("Mode")
       }
-      LabeledContent {
-        Picker("Type", selection: typeBinding) {
-          Text("Whitelist").tag(PolicyType.whitelist)
-          Text("Blacklist").tag(PolicyType.blacklist)
-        }
-        .pickerStyle(.radioGroup)
-        .horizontalRadioGroupLayout()
-        .labelsHidden()
-      } label: {
-        Text("Type")
-      }
     } header: {
       Text("Behavior")
     }
   }
 
-  private func rulesSection(_ draft: DirectoryPolicyDraft) -> some View {
-    Section {
-      if let warning = emptyRulesWarning(draft) {
+  /// One of the policy's two lists, in the order chosen in the View menu. Programs to Allow has
+  /// a switch that decides whether decisions use it; while it is off, its rules are kept
+  /// unchanged and can't be edited.
+  private func rulesSection(_ draft: DirectoryPolicyDraft, list: PolicyRuleList) -> some View {
+    let rules = sortOrder.sorted(draft[list]) { model.ruleDisplayName(for: $0) }
+    let isUsed = draft.uses(list)
+    return Section {
+      if list == .allow {
+        Toggle("Allow Only Programs in This List", isOn: allowListInUseBinding)
+      }
+      if list == .allow, let warning = emptyAllowListWarning(draft) {
         WarningLabel(text: warning)
-      } else if draft.rules.isEmpty {
+      } else if rules.isEmpty, isUsed {
         // A section without rows would let the next section's header collapse into this one.
         Text("No rules")
           .foregroundStyle(.secondary)
       }
-      ForEach(draft.rules) { rule in
+      ForEach(rules) { rule in
         RuleRow(
           rule: rule,
+          list: list,
           displayName: model.ruleDisplayName(for: rule),
           isEnabled: enabledBinding(for: rule),
-          onEdit: { editingRule = rule },
+          onEdit: { editingRule = RuleEditRequest(rule: rule, list: list) },
           onRemove: { model.removeRule(policyID: policyID, ruleID: rule.id) }
         )
+        .disabled(!isUsed)
       }
     } header: {
       HStack {
-        Text(PolicyBehaviorText.rulesTitle(draft.policyType))
-        if !draft.rules.isEmpty {
+        Text(PolicyBehaviorText.rulesTitle(list))
+        if isUsed, !rules.isEmpty {
           Text(
             RuleCountText.summary(
-              active: draft.rules.lazy.filter(\.isEnabled).count, total: draft.rules.count)
+              active: rules.lazy.filter(\.isEnabled).count, total: rules.count)
           )
           .foregroundStyle(.secondary)
         }
         Spacer()
         Button {
-          model.addProgramRequest = AddProgramRequest(policyID: policyID)
+          model.addProgramRequest = AddProgramRequest(policyID: policyID, list: list)
         } label: {
           Label("Add Program…", systemImage: "plus")
         }
+        .disabled(!isUsed)
+        .accessibilityLabel(PolicyBehaviorText.addToListTitle(list))
       }
     }
   }
 
-  /// A Protection whitelist without rules in use denies every open in its folder.
-  private func emptyRulesWarning(_ draft: DirectoryPolicyDraft) -> String? {
-    guard draft.mode == .protection, draft.policyType == .whitelist,
-      !draft.rules.contains(where: \.isEnabled)
-    else { return nil }
-    return String(
-      localized: "No program is allowed. After you save, every open in this folder is denied.")
-  }
-
-  @ViewBuilder
+  /// The built-in compatibility profiles, each with a switch, and any profile the policy turns
+  /// on that this version doesn't offer, so it can be turned off. Turning one on lets the
+  /// profile's Apple system processes in and is saved only after administrator authentication.
   private func compatibilitySection(_ draft: DirectoryPolicyDraft) -> some View {
-    if draft.policyType == .whitelist {
-      Section {
-        let items = model.systemCompatibilityProfileItems(policyID: policyID)
-        if items.isEmpty {
-          Label("No verified compatibility profiles yet", systemImage: "puzzlepiece.extension")
-        } else {
-          ForEach(items) { item in
-            CompatibilityProfileRow(
-              item: item,
-              isEditable: compatibilityIsEditable,
-              disabledReason: compatibilityDisabledReason
-            ) { enabled in
-              Task {
-                await model.setSystemCompatibilityProfile(
-                  policyID: policyID, profileID: item.profile.id, enabled: enabled)
-              }
-            }
+    let offered = Set(model.systemCompatibilityCatalog.profiles.map(\.id))
+    let unavailable = draft.systemCompatibilityProfiles.filter {
+      !offered.contains($0.profileIdentifier)
+    }
+    return Section {
+      ForEach(model.systemCompatibilityCatalog.profiles) { profile in
+        let state = model.systemCompatibilityState(
+          policyID: policyID, profileIdentifier: profile.id)
+        let isSupported = model.isSupportedOnThisMac(profile)
+        Toggle(isOn: compatibilityBinding(profile.id)) {
+          Text(SystemCompatibilityText.name(identifier: profile.id))
+          if let reason = state?.inactiveReason {
+            Text(reason)
+              .foregroundStyle(.orange)
+          } else if state != nil {
+            Text(SystemCompatibilityText.consequence(profile))
+          } else if !isSupported {
+            Text(SystemCompatibilityProfileState.unsupportedOS.displayName)
           }
         }
-      } header: {
-        Text("System Compatibility")
+        .toggleStyle(.switch)
+        .disabled(state == nil && !isSupported)
+        .help(SystemCompatibilityText.role(profile))
+        .accessibilityLabel(SystemCompatibilityText.name(identifier: profile.id))
       }
+      ForEach(unavailable, id: \.profileIdentifier) { entry in
+        Toggle(isOn: compatibilityBinding(entry.profileIdentifier)) {
+          Text(SystemCompatibilityText.name(identifier: entry.profileIdentifier))
+          if let reason = SystemCompatibilityProfileState.missingProfile.inactiveReason {
+            Text(reason)
+              .foregroundStyle(.orange)
+          }
+        }
+        .toggleStyle(.switch)
+        .accessibilityLabel(SystemCompatibilityText.name(identifier: entry.profileIdentifier))
+      }
+    } header: {
+      Text("System Compatibility")
     }
   }
 
-  private var compatibilityIsEditable: Bool {
-    !model.isBusy && model.activePolicy(id: policyID) != nil && !model.isPolicyDirty(policyID)
-      && model.systemCompatibilityCatalogMatchesExtension
+  private func compatibilityBinding(_ identifier: String) -> Binding<Bool> {
+    Binding(
+      get: {
+        model.policyDraft(id: policyID)?.systemCompatibilityProfiles.contains {
+          $0.profileIdentifier == identifier
+        } ?? false
+      },
+      set: { model.setSystemCompatibilityProfile(identifier, isOn: $0, policyID: policyID) }
+    )
   }
 
-  private var compatibilityDisabledReason: String? {
-    if model.activePolicy(id: policyID) == nil || model.isPolicyDirty(policyID) {
-      return String(localized: "Save this policy first.")
+  /// The allow list has no enabled rule, but active compatibility profiles can still allow
+  /// requests. The warning speaks of saving only while the draft differs from the saved policy.
+  private func emptyAllowListWarning(_ draft: DirectoryPolicyDraft) -> String? {
+    guard draft.mode == .protection, !draft.isBlacklistEnabled,
+      !draft.allowRules.contains(where: \.isEnabled)
+    else { return nil }
+    if isDirty {
+      return String(
+        localized:
+          "After saving, no allow rules will be enabled. Active compatibility profiles can still allow requests."
+      )
     }
-    if !model.systemCompatibilityCatalogMatchesExtension {
-      return String(localized: "The app and extension must use the same built-in definitions.")
-    }
-    return nil
+    return String(
+      localized:
+        "No allow rules are enabled. Active compatibility profiles can still allow requests.")
   }
 
   // MARK: - Saving
 
   private var isDirty: Bool { model.isPolicyDirty(policyID) }
 
+  /// Edited, shown from policies the extension no longer has in full, or keeping retired paths
+  /// that only a save releases.
+  private var needsSaving: Bool {
+    isDirty || (model.savedPoliciesNeedSaving && model.activePolicy(id: policyID) != nil)
+      || !retiredPaths.isEmpty
+  }
+
   private var validationMessage: String? {
-    isDirty ? model.draftValidationMessage(for: policyID) : nil
+    needsSaving ? model.draftValidationMessage(for: policyID) : nil
   }
 
   private var canSave: Bool {
-    !model.isBusy && isDirty && validationMessage == nil
+    !model.isBusy && needsSaving && validationMessage == nil
   }
 
   private var canRevert: Bool {
     !model.isBusy && isDirty
+  }
+
+  private var canDuplicate: Bool {
+    !model.isBusy && model.canCreatePolicy && model.policyDraft(id: policyID) != nil
+  }
+
+  /// A change that reduces protection is saved only after the macOS administrator password
+  /// dialog; the button says so with an ellipsis.
+  private var saveNeedsAuthorization: Bool {
+    canSave && model.savingWeakensProtection(policyID: policyID)
   }
 
   private func save() {
@@ -352,7 +392,7 @@ struct PolicyView: View {
   @ViewBuilder
   private var saveButton: some View {
     if canSave {
-      Button("Save") {
+      Button(saveNeedsAuthorization ? "Save…" : "Save") {
         save()
       }
       .buttonStyle(.borderedProminent)
@@ -384,6 +424,22 @@ struct PolicyView: View {
     if let validationMessage {
       return Notice(text: validationMessage, systemImage: "exclamationmark.circle", color: .orange)
     }
+    guard model.activePolicy(id: policyID) != nil else { return nil }
+    if model.isServingRecoveryPolicies {
+      return Notice(
+        text: String(
+          localized:
+            "The programs of this policy were lost. Add them again and save every policy."),
+        systemImage: "exclamationmark.triangle", color: .orange)
+    }
+    if let saved = model.unconfirmedSave, !isDirty {
+      return Notice(
+        text: String(
+          localized:
+            "Saved as revision \(saved.acceptedRevision). The extension has not confirmed that it is in effect."
+        ),
+        systemImage: "clock", color: .orange)
+    }
     return nil
   }
 
@@ -410,51 +466,9 @@ struct PolicyView: View {
       return String(localized: "Unsaved changes")
     }
     if draft.mode == .audit {
-      return String(
-        localized:
-          "\(draft.mode.displayName) · \(draft.policyType.displayName) · Nothing is blocked")
+      return String(localized: "\(draft.mode.displayName) · Nothing is blocked")
     }
-    return "\(draft.mode.displayName) · \(draft.policyType.displayName)"
-  }
-
-  private func typeChangeMessage(_ request: PolicyTypeChangeRequest) -> String {
-    switch request.targetType {
-    case .blacklist:
-      String(
-        localized:
-          "The \(request.ruleCount) programs in the list will be denied instead of allowed. The change applies when you save."
-      )
-    case .whitelist:
-      String(
-        localized:
-          "Only the \(request.ruleCount) programs in the list will be allowed. The change applies when you save."
-      )
-    }
-  }
-
-  private var protectionSwitchMessage: String {
-    let denied = model.projectedDenials(policyID: policyID)
-    var parts: [String] = []
-    if denied.isEmpty {
-      parts.append(String(localized: "No program in the loaded records would be denied."))
-    } else {
-      let names = denied.prefix(5).map(\.displayName).joined(separator: ", ")
-      let remaining = denied.count - min(denied.count, 5)
-      let list =
-        remaining > 0 ? String(localized: "\(names) and \(remaining) more") : names
-      parts.append(
-        String(
-          localized:
-            "Based on the loaded records, opens from these programs would be denied: \(list)."))
-    }
-    parts.append(String(localized: "The change is saved and applied right away."))
-    if let draft = model.policyDraft(id: policyID),
-      let active = model.activePolicy(id: policyID),
-      draft.makePolicy() != active
-    {
-      parts.append(String(localized: "Other unsaved changes to this policy are saved too."))
-    }
-    return parts.joined(separator: " ")
+    return draft.mode.displayName
   }
 
   // MARK: - Bindings and actions
@@ -473,29 +487,12 @@ struct PolicyView: View {
     )
   }
 
-  private var typeBinding: Binding<PolicyType> {
+  /// The policy's explicit setting, shown as the switch of Programs to Allow. It does not
+  /// depend on how many rules the list has, and changing it moves or removes no rule.
+  private var allowListInUseBinding: Binding<Bool> {
     Binding(
-      get: {
-        if let pendingTypeChange, pendingTypeChange.policyID == policyID {
-          return pendingTypeChange.targetType
-        }
-        return model.policyDraft(id: policyID)?.policyType ?? .whitelist
-      },
-      set: { value in
-        guard let draft = model.policyDraft(id: policyID), value != draft.policyType else {
-          return
-        }
-        if draft.rules.isEmpty {
-          model.updatePolicyDraft(id: policyID) { $0.policyType = value }
-        } else {
-          pendingTypeChange = PolicyTypeChangeRequest(
-            policyID: policyID,
-            currentType: draft.policyType,
-            targetType: value,
-            ruleCount: draft.rules.count
-          )
-        }
-      }
+      get: { !(model.policyDraft(id: policyID)?.isBlacklistEnabled ?? false) },
+      set: { model.setAllowListInUse(policyID: policyID, $0) }
     )
   }
 
@@ -511,26 +508,8 @@ struct PolicyView: View {
   }
 
   private func currentRule(_ ruleID: String) -> PolicyRule? {
-    guard let rules = model.policyDraft(id: policyID)?.rules else { return nil }
-    return rules.first(where: { $0.id == ruleID })
-  }
-
-  private var typeChangeIsPresented: Binding<Bool> {
-    Binding(
-      get: { pendingTypeChange != nil },
-      set: { isPresented in
-        if !isPresented { pendingTypeChange = nil }
-      }
-    )
-  }
-
-  private func apply(_ request: PolicyTypeChangeRequest, deletingAllRules: Bool) {
-    model.applyPolicyTypeChange(
-      policyID: request.policyID,
-      to: request.targetType,
-      deletingAllRules: deletingAllRules
-    )
-    pendingTypeChange = nil
+    guard let draft = model.policyDraft(id: policyID) else { return nil }
+    return (draft.allowRules + draft.denyRules).first { $0.id == ruleID }
   }
 
   private func setFolder(_ url: URL) {
@@ -583,8 +562,11 @@ private struct FolderPathRow: View {
     .onAppear {
       text = displayText
       if isFocusRequested {
-        isEditing = true
         onFocus()
+        // When the policy was created by the keyboard shortcut of a menu command, the key event
+        // is still being handled as this screen appears, and a focus request made now is
+        // dropped. Requesting it on the next turn of the main queue works in either case.
+        Task { @MainActor in isEditing = true }
       }
     }
     .onChange(of: path) { text = displayText }
@@ -608,23 +590,26 @@ enum PolicyEditorTab: Hashable {
   case log
 }
 
-// Keep presentation and its content together so the confirmation can never be empty.
-private struct PolicyTypeChangeRequest: Identifiable {
-  let id = UUID()
-  let policyID: UUID
-  let currentType: PolicyType
-  let targetType: PolicyType
-  let ruleCount: Int
+/// A rule being edited, with the list it belongs to.
+private struct RuleEditRequest: Identifiable {
+  let rule: PolicyRule
+  let list: PolicyRuleList
+
+  var id: String { rule.id }
 }
 
 // MARK: - Rule row
 
 private struct RuleRow: View {
   let rule: PolicyRule
+  let list: PolicyRuleList
   let displayName: String
   @Binding var isEnabled: Bool
   let onEdit: () -> Void
   let onRemove: () -> Void
+
+  /// False while the policy doesn't use this rule's list (see `DirectoryPolicyDraft.uses`).
+  @Environment(\.isEnabled) private var isListUsed
 
   var body: some View {
     HStack {
@@ -633,20 +618,21 @@ private struct RuleRow: View {
         HStack {
           Text(displayName)
             .lineLimit(1)
-          if rule.allowsDescendants {
-            Text("Includes child processes")
-              .font(.caption)
-              .foregroundStyle(.orange)
-          }
           if !isEnabled {
             Text("Off")
               .font(.caption)
               .foregroundStyle(.secondary)
           }
+          if list == .allow && rule.allowsDescendants {
+            Image(systemName: "arrow.triangle.branch")
+              .foregroundStyle(.secondary)
+              .help("Include descendant processes")
+              .accessibilityLabel("Include descendant processes")
+          }
         }
         SignatureLine(kind: rule.kind.displayName, identifiers: identity)
       }
-      .foregroundStyle(isEnabled ? .primary : .secondary)
+      .foregroundStyle(isEnabled && isListUsed ? .primary : .secondary)
       Spacer()
       Toggle("Use this rule", isOn: $isEnabled)
         .toggleStyle(.switch)
@@ -674,52 +660,6 @@ private struct RuleRow: View {
       "\(rule.teamIdentifier ?? "—") · \(rule.signingIdentifier)"
     case .platformBinary:
       rule.signingIdentifier
-    }
-  }
-}
-
-// MARK: - Compatibility profile row
-
-private struct CompatibilityProfileRow: View {
-  let item: SystemCompatibilityProfileItem
-  let isEditable: Bool
-  let disabledReason: String?
-  let setEnabled: (Bool) -> Void
-
-  var body: some View {
-    HStack(alignment: .top) {
-      Label {
-        HStack {
-          Text(item.profile.displayName)
-          Text(item.state.displayName)
-            .foregroundStyle(stateTint)
-        }
-        Text(item.profile.roleDescription)
-        Text(item.profile.consequence)
-          .foregroundStyle(.orange)
-      } icon: {
-        Image(systemName: "puzzlepiece.extension")
-      }
-      Spacer()
-      Button(buttonTitle) {
-        setEnabled(item.state.needsReview ? true : !item.isEnabled)
-      }
-      .disabled(!isEditable)
-      .help(disabledReason ?? "")
-    }
-  }
-
-  private var buttonTitle: String {
-    if item.state.needsReview { return String(localized: "Review and Turn On") }
-    return item.isEnabled ? String(localized: "Turn Off") : String(localized: "Turn On")
-  }
-
-  private var stateTint: Color {
-    switch item.state {
-    case .active: .green
-    case .disabled: .secondary
-    case .needsReview, .missingProfile, .unsupportedOS, .policyContextChanged, .policyMissing:
-      .orange
     }
   }
 }

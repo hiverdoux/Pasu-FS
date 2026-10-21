@@ -125,15 +125,18 @@ public final class ProcessLineageTracker: @unchecked Sendable {
       guard !state.closed else { return }
       state.observeDelivery(observation)
       let bytes = observation.estimatedByteCount + (record?.estimatedByteCount ?? 0) + 1_024
-      var reservation = budget.reserve(bytes: bytes)
+      // A denied request waits only in its own lane, at full size or else without history.
+      let lane = record?.auditLane ?? .general
+      var reservation = budget.reserve(bytes: bytes, lane: lane)
       if reservation == nil {
         state.note("queueOverflow", at: observation.timestamp)
         minimal = true
-        if observation.eventType == "AUTH_OPEN", let record {
+        if AuthorizationEventCatalog.isAuthorizationEvent(observation.eventType), let record {
           item.source = observation.source.map(Self.compact)
           item.target = nil
           reservation = budget.reserve(
-            bytes: item.estimatedByteCount + record.estimatedByteCount + 1_024, lane: .audit)
+            bytes: item.estimatedByteCount + record.estimatedByteCount + 1_024,
+            lane: lane == .denied ? .denied : .audit)
         } else if ["NOTIFY_EXEC", "NOTIFY_FORK", "NOTIFY_EXIT"].contains(observation.eventType) {
           item.source = observation.source.map(Self.compact)
           item.target = observation.target.map(Self.compact)
@@ -148,11 +151,17 @@ public final class ProcessLineageTracker: @unchecked Sendable {
         }
       }
       guard let reservation else {
-        if let record { (sink as? any ReservedEndpointEventSink)?.recordAdmissionDrop(record) }
+        if var record {
+          // Without room the record is lost unless it repeats an open record.
+          record.timestamp = observation.timestamp
+          (sink as? any ReservedEndpointEventSink)?.recordAdmissionDrop(
+            record, actor: observation.actor?.key)
+        }
         return
       }
       if let omittedLifecycleRecord {
-        (sink as? any ReservedEndpointEventSink)?.recordAdmissionDrop(omittedLifecycleRecord)
+        (sink as? any ReservedEndpointEventSink)?.recordAdmissionDrop(
+          omittedLifecycleRecord, actor: nil)
       }
       let deliveryIssues = Array(state.deliveryIssues.values)
       let queuedObservation = item
@@ -162,11 +171,20 @@ public final class ProcessLineageTracker: @unchecked Sendable {
         var transferred = false
         defer { if !transferred { reservation.release() } }
         graph.mergeDeliveryIssues(deliveryIssues)
-        if !isMinimal || queuedObservation.eventType != "AUTH_OPEN" {
+        if !isMinimal
+          || !AuthorizationEventCatalog.isAuthorizationEvent(queuedObservation.eventType)
+        {
           graph.observe(queuedObservation, preserveMetadata: isMinimal)
         }
         if var record = queuedRecord {
           record.timestamp = queuedObservation.timestamp
+          // A repeat only adds to the count of the record it repeats, which keeps its own history.
+          if let reservedSink = sink as? any ReservedEndpointEventSink,
+            reservedSink.absorbRepeat(record, actor: queuedObservation.actor?.key)
+          {
+            self.state.withLock { $0.status = graph.status }
+            return
+          }
           let baseBytes = queuedObservation.estimatedByteCount + record.estimatedByteCount + 1_024
           record.processLineage =
             isMinimal

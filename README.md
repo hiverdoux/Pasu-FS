@@ -1,6 +1,7 @@
 # Pasu FS
 
-Pasu FS controls which applications can open files in selected folders on macOS.
+Pasu FS controls which applications can open and change files in selected
+folders on macOS.
 It adds application-based rules to normal file permissions: two applications
 running under the same user account can receive different access decisions.
 
@@ -13,23 +14,61 @@ macOS language setting and are available in English and Korean.
 
 ## What it protects
 
-Each policy selects one folder and one of these rule types:
+Each policy selects one folder and has independent allow and deny lists. The
+deny list always applies: a denied ordinary program anywhere in the observed
+history blocks that path. The allow list has its own switch, on by default.
+While it is on, the first ordinary program in the observed execution history
+must match it. The program opening the file must either match it directly or
+inherit permission from an allowed program with **Include descendant processes**
+on. This option follows observed process creation and executable replacement;
+it never bypasses a denied origin, a block rule or missing history. An allow list
+without an enabled rule grants no access through the list. Active
+system-compatibility profiles can still allow matching requests. Turning the
+list off keeps its rules but turns both allow checks off.
 
-- **Whitelist:** allow matching programs and deny other programs. An empty list
-  denies all supported opens in that folder.
-- **Blacklist:** deny matching programs and allow other programs.
+A policy can also turn on system-compatibility profiles, which let specific Apple
+system services work in its folder although no program in the lists started
+them: the services that prepare an app's container and the XProtect malware
+scanner, which may only read, and the service that carries out Finder's
+copies and restores from the Time Machine screen, which lets Finder copy files
+and folders into the folder and out of it, including the whole folder. A
+profile admits only the named Apple programs that launchd started, running as
+root or, for some services, as the folder's owner. Turning one on in a saved
+Protection policy needs an administrator password.
 
-**Protection** applies these decisions. **Audit** records the predicted decisions
-without blocking access. When folders overlap, every matching Protection policy
-must allow the operation. Rules identify signed programs, rather than trusting a
-program's filename alone. An optional descendant rule extends its effect to
-processes that the matched program launches.
+**Protection** enforces these decisions. **Audit** records predictions without
+blocking access. Every overlapping Protection policy must allow. Exact signature
+identity and observed history determine access; a filename or current responsible
+process alone cannot establish origin. Program launch itself is not blocked.
 
-Only new file opens represented by Endpoint Security's `AUTH_OPEN` event are
-covered. Creating, moving, deleting, linking, copying and memory-mapping files
-are not comprehensively protected. Existing open files are not revoked. An
-allowed program can disclose information it reads. Protection stops when the
-system extension is inactive. See the [security boundaries](docs/threat-model.md).
+The app edits both lists and the allow-list switch of each policy. Its policy
+log shows the decision the extension recorded for each request: the first
+program, the program that made the request, the program that delegated access,
+a blocked program found in the history, or the reason the history could not be
+established.
+
+New requests to open, create, rename or move, delete, hard link, clone, copy
+with the `copyfile` system call, truncate and exchange files are covered (the
+Endpoint Security `AUTH_OPEN`, `AUTH_CREATE`, `AUTH_RENAME`, `AUTH_UNLINK`,
+`AUTH_LINK`, `AUTH_CLONE`, `AUTH_COPYFILE`, `AUTH_TRUNCATE` and
+`AUTH_EXCHANGEDATA` events), and so are changes to the metadata of a policy's
+folder and of the items in it: permissions, owner, file flags, access control
+lists, extended attributes, other attributes and times (`AUTH_SETMODE`,
+`AUTH_SETOWNER`, `AUTH_SETFLAGS`, `AUTH_SETACL`, `AUTH_SETEXTATTR`,
+`AUTH_DELETEEXTATTR`, `AUTH_SETATTRLIST` and `AUTH_UTIMES`). Mounting a volume
+at a policy's folder, inside it or at a folder that contains it (`AUTH_MOUNT`)
+is refused for every program, because the mounted volume would hide the folder.
+Renaming or moving a folder that contains a policy's folder is allowed for every
+program: the policy follows its folder by the folder's identity when it moves
+within its volume, and the files stay protected at the new path. The previous
+path stays reserved for the policy's allowed programs until the policy is saved
+again, so other programs can't recreate it or redirect saves made to it. Memory
+mapping, reading metadata such as sizes, times and extended attributes, metadata
+changes to the folders that contain a protected folder, and existing open files
+are not covered, and neither are the copies of a protected folder in APFS
+snapshots and Time Machine backups. An allowed program can disclose information
+it reads. Protection stops when the system extension is inactive. See the
+[security boundaries](docs/threat-model.md).
 
 ## Build and install
 
@@ -77,7 +116,8 @@ product will fail. It does not subscribe to file events or enforce policies.
 - [Report a security problem](SECURITY.md)
 
 Policies and logs stay on the Mac. Logs contain process identities and file paths,
-not file contents or command arguments. Each log is limited to a current 10 MiB
+not file contents or command arguments. Repeated requests from one process within
+a second are counted in one record. Each log is limited to a current 10 MiB
 file and one previous file. The app displays a limited recent portion of those
 records, not a complete history of every filesystem operation.
 

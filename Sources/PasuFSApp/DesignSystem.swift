@@ -145,22 +145,40 @@ struct DecisionText: View {
   }
 }
 
-/// The final answer Pasu FS gave macOS for a request.
+/// The final answer macOS got for a request: Pasu FS's, or macOS's own when Pasu FS's answer
+/// missed the deadline, which is marked below it.
 struct ResponseText: View {
   let response: String
+  let deadlineMissMode: DeadlineMissModeStatus?
 
   var body: some View {
-    Text(KernelResponseText.label(response))
-      .fontWeight(.semibold)
-      .foregroundStyle(tint)
+    VStack(alignment: .leading) {
+      Text(KernelResponseText.label(response, deadlineMissMode: deadlineMissMode))
+        .fontWeight(.semibold)
+        .foregroundStyle(tint)
+      if isMissedDeadline, outcome != .unknown {
+        Text("Missed deadline")
+          .font(.caption)
+          .foregroundStyle(.orange)
+      }
+    }
   }
+
+  private var isMissedDeadline: Bool { response == KernelResponseText.missedDeadline }
+
+  private var outcome: MissedDeadlineOutcome { MissedDeadlineOutcome(deadlineMissMode) }
 
   private var tint: Color {
     switch response {
     case "deny": .red
     case "allow": .green
     case "notify-only": .blue
-    case "response-error": .orange
+    case KernelResponseText.missedDeadline:
+      switch outcome {
+      case .denied: .red
+      case .allowed: .green
+      case .unknown: .orange
+      }
     default: .secondary
     }
   }
@@ -251,11 +269,26 @@ struct DetailRows: View {
           .multilineTextAlignment(.trailing)
           .textSelection(.enabled)
       }
+      // Another record shows its values in the same rows.
+      .accessibilityRowValue(row.value)
     }
   }
 }
 
 extension View {
+  /// Gives a `LabeledContent` row whose value changes while it is shown the value it shows as
+  /// its accessibility value.
+  ///
+  /// In a grouped form on macOS 27.0.1, such a row keeps the accessibility value it had when it
+  /// appeared, whatever text it shows later, so VoiceOver can read a value that is no longer on
+  /// the screen; macOS 26.6.2 and 27.2 update it. An explicit value follows each change. Pass the
+  /// text the row shows, and don't use this on a row whose value is a control. When the row's
+  /// label is a `Label`, use this on the value view instead: on the row, the label also takes the
+  /// value.
+  func accessibilityRowValue(_ value: String) -> some View {
+    accessibilityValue(Text(verbatim: value))
+  }
+
   /// Searches the records a screen has loaded with the system toolbar search item. When the
   /// toolbar is short of room, the system shows it as a button that expands into the field, moves
   /// the other items aside and puts those that no longer fit in the overflow menu.

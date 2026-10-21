@@ -11,60 +11,42 @@
         }
       }
     },
-    "%@ and %lld more" : {
+    "%@ copy" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ 외 %lld개"
+            "value" : "%@ 복사본"
           }
         }
       }
     },
-    "%@ · %@ · Nothing is blocked" : {
+    "%@ copy %lld" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ · %@ · 차단하지 않음"
+            "value" : "%@ 복사본 %lld"
           }
         }
       }
     },
-    "%@ · %lld records loaded (up to 500)" : {
+    "%@ · %@ after startup" : {
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ · %2$#@records@ loaded (up to 500)"
-          },
-          "substitutions" : {
-            "records" : {
-              "argNum" : 2,
-              "formatSpecifier" : "lld",
-              "variations" : {
-                "plural" : {
-                  "one" : {
-                    "stringUnit" : {
-                      "state" : "translated",
-                      "value" : "%arg record"
-                    }
-                  },
-                  "other" : {
-                    "stringUnit" : {
-                      "state" : "translated",
-                      "value" : "%arg records"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ · 불러온 기록 %lld건 (최대 500건)"
+            "value" : "%@ · 시동 후 %@"
+          }
+        }
+      }
+    },
+    "%@ · Nothing is blocked" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · 차단하지 않음"
           }
         }
       }
@@ -85,6 +67,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%@: 설치되어 있지만 실행 중이 아닙니다."
+          }
+        }
+      }
+    },
+    "%@: keeps running until a restart; macOS then removes it." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@: 재시동할 때까지 계속 실행되며, 재시동 후 macOS가 제거합니다."
           }
         }
       }
@@ -115,6 +107,82 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%@: 시스템 설정에서 승인을 기다리는 중입니다."
+          }
+        }
+      }
+    },
+    "%lld issues" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "오류·경고 %lld개"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$#@issues@"
+          },
+          "substitutions" : {
+            "issues" : {
+              "argNum" : 1,
+              "formatSpecifier" : "lld",
+              "variations" : {
+                "plural" : {
+                  "one" : {
+                    "stringUnit" : {
+                      "state" : "translated",
+                      "value" : "%arg issue"
+                    }
+                  },
+                  "other" : {
+                    "stringUnit" : {
+                      "state" : "translated",
+                      "value" : "%arg issues"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld issues: %@" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "오류·경고 %lld개: %@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$#@issues@: %2$@"
+          },
+          "substitutions" : {
+            "issues" : {
+              "argNum" : 1,
+              "formatSpecifier" : "lld",
+              "variations" : {
+                "plural" : {
+                  "one" : {
+                    "stringUnit" : {
+                      "state" : "translated",
+                      "value" : "%arg issue"
+                    }
+                  },
+                  "other" : {
+                    "stringUnit" : {
+                      "state" : "translated",
+                      "value" : "%arg issues"
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -157,15 +225,21 @@
         }
       }
     },
-    "%lld opens · Denied %lld · Allowed %lld" : {
+    "%lld records loaded (up to 500)" : {
       "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "불러온 기록 %lld건 (최대 500건)"
+          }
+        },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$#@opens@ · Denied %2$lld · Allowed %3$lld"
+            "value" : "%1$#@records@ loaded (up to 500)"
           },
           "substitutions" : {
-            "opens" : {
+            "records" : {
               "argNum" : 1,
               "formatSpecifier" : "lld",
               "variations" : {
@@ -173,13 +247,45 @@
                   "one" : {
                     "stringUnit" : {
                       "state" : "translated",
-                      "value" : "%arg open"
+                      "value" : "%arg record"
                     }
                   },
                   "other" : {
                     "stringUnit" : {
                       "state" : "translated",
-                      "value" : "%arg opens"
+                      "value" : "%arg records"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld requests · Denied %lld · Allowed %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$#@requests@ · Denied %2$lld · Allowed %3$lld"
+          },
+          "substitutions" : {
+            "requests" : {
+              "argNum" : 1,
+              "formatSpecifier" : "lld",
+              "variations" : {
+                "plural" : {
+                  "one" : {
+                    "stringUnit" : {
+                      "state" : "translated",
+                      "value" : "%arg request"
+                    }
+                  },
+                  "other" : {
+                    "stringUnit" : {
+                      "state" : "translated",
+                      "value" : "%arg requests"
                     }
                   }
                 }
@@ -190,7 +296,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "열기 %lld회 · 거부 %lld회 · 허용 %lld회"
+            "value" : "요청 %lld회 · 거부 %lld회 · 허용 %lld회"
           }
         }
       }
@@ -247,6 +353,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "읽을 수 없는 줄 %lld개를 건너뛰었습니다."
+          }
+        }
+      }
+    },
+    "%llu (current %llu)" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%llu (현재 %llu)"
+          }
+        }
+      }
+    },
+    "%llu (current)" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%llu (현재)"
           }
         }
       }
@@ -367,6 +493,46 @@
         }
       }
     },
+    "A process event could not be read." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "프로세스 이벤트를 읽지 못했습니다."
+          }
+        }
+      }
+    },
+    "A program was added to a block list, so the earlier execution history can’t be used." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "차단할 프로그램이 새로 추가되어 이전 실행 이력을 사용할 수 없습니다."
+          }
+        }
+      }
+    },
+    "A protected folder can’t be found: %@. Its last path stays protected." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "보호 폴더를 찾을 수 없습니다: %@. 마지막 경로는 계속 보호됩니다."
+          }
+        }
+      }
+    },
+    "A protected folder moved, but its policy could not be updated: %@" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "보호 폴더가 옮겨졌지만 정책을 갱신하지 못했습니다: %@"
+          }
+        }
+      }
+    },
     "A rule has an invalid internal ID." : {
       "localizations" : {
         "ko" : {
@@ -377,12 +543,82 @@
         }
       }
     },
+    "A selected rule includes descendant processes." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "선택한 규칙 중 자손 프로세스를 허용하는 규칙이 있습니다."
+          }
+        }
+      }
+    },
+    "A volume at %@ was unmounted. Check the protected folders there, then save the policies again to clear this notice." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@에 마운트되어 있던 볼륨이 마운트 해제되었습니다. 그 아래의 보호 폴더를 확인한 뒤 정책을 다시 저장하면 이 알림이 사라집니다."
+          }
+        }
+      }
+    },
     "Access" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "접근 방식"
+          }
+        }
+      }
+    },
+    "Access Process" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "접근 프로세스"
+          }
+        }
+      }
+    },
+    "Access allowed by a descendant rule" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "자손 허용 규칙에 따라 접근 허용"
+          }
+        }
+      }
+    },
+    "Access control list change (AUTH_SETACL)" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "접근 제어 목록 변경 (AUTH_SETACL)"
+          }
+        }
+      }
+    },
+    "Access process is not allowed" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "접근 프로세스가 허용되지 않음"
+          }
+        }
+      }
+    },
+    "Access process · PID %@" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "접근 프로세스 · PID %@"
           }
         }
       }
@@ -417,6 +653,16 @@
         }
       }
     },
+    "Active compatibility profiles" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "활성 호환성 프로필"
+          }
+        }
+      }
+    },
     "Add" : {
       "localizations" : {
         "ko" : {
@@ -433,6 +679,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "프로그램 추가…"
+          }
+        }
+      }
+    },
+    "Add Rule" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "규칙 추가"
           }
         }
       }
@@ -457,22 +713,22 @@
         }
       }
     },
-    "Add to Blacklist" : {
+    "Add to Programs to Allow" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "블랙리스트에 추가"
+            "value" : "허용할 프로그램에 추가"
           }
         }
       }
     },
-    "Add to Whitelist" : {
+    "Add to Programs to Block" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "화이트리스트에 추가"
+            "value" : "차단할 프로그램에 추가"
           }
         }
       }
@@ -521,6 +777,18 @@
         }
       }
     },
+    "Administrator authentication is required to reduce the protection of a Pasu FS policy." : {
+      "comment" : "Shown by macOS in its administrator password dialog; read from this catalog when the installer registers the right.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pasu FS 정책의 보호를 줄이려면 관리자 인증이 필요합니다."
+          }
+        }
+      }
+    },
     "Administrator authentication is required to uninstall Pasu FS from this Mac." : {
       "comment" : "Shown by macOS in its administrator password dialog; read from this catalog when the installer registers the right.",
       "extractionState" : "manual",
@@ -563,12 +831,32 @@
         }
       }
     },
+    "Administrator authentication was canceled. The policies were not changed." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "관리자 인증이 취소되었습니다. 정책은 변경되지 않았습니다."
+          }
+        }
+      }
+    },
     "Administrator authentication was denied. Nothing was changed." : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "관리자 인증이 거부되었습니다. 아무것도 변경하지 않았습니다."
+          }
+        }
+      }
+    },
+    "After saving, no allow rules will be enabled. Active compatibility profiles can still allow requests." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "저장 후에는 켜진 허용 규칙이 없습니다. 활성 호환성 프로필은 요청을 허용할 수 있습니다."
           }
         }
       }
@@ -603,12 +891,32 @@
         }
       }
     },
+    "All requests" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "모든 요청"
+          }
+        }
+      }
+    },
     "Allow" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "허용"
+          }
+        }
+      }
+    },
+    "Allow %lld · Block %lld" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "허용 %1$lld개 · 차단 %2$lld개"
           }
         }
       }
@@ -633,12 +941,52 @@
         }
       }
     },
+    "Allow Only Programs in This List" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 목록의 프로그램만 허용"
+          }
+        }
+      }
+    },
     "Allowed" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "허용됨"
+          }
+        }
+      }
+    },
+    "Allowed (missed deadline)" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "허용됨(기한 초과)"
+          }
+        }
+      }
+    },
+    "Allowed as a descendant" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "자손 프로세스로 허용됨"
+          }
+        }
+      }
+    },
+    "Allowed by the compatibility profile “%@”" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "호환성 프로필 ‘%@’에 따라 허용됨"
           }
         }
       }
@@ -753,6 +1101,26 @@
         }
       }
     },
+    "App Container Management" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "앱 컨테이너 관리"
+          }
+        }
+      }
+    },
+    "App or Executable" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "앱 또는 실행 파일"
+          }
+        }
+      }
+    },
     "Apple platform binary" : {
       "localizations" : {
         "ko" : {
@@ -763,12 +1131,22 @@
         }
       }
     },
-    "Application" : {
+    "Apple’s container services can read this app container." : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "응용 프로그램"
+            "value" : "Apple 컨테이너 서비스가 이 앱 컨테이너를 읽을 수 있습니다."
+          }
+        }
+      }
+    },
+    "Apple’s malware scanner can read this folder." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple 악성 코드 검사기가 이 폴더를 읽을 수 있습니다."
           }
         }
       }
@@ -813,6 +1191,16 @@
         }
       }
     },
+    "Attribute change (AUTH_SETATTRLIST)" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "속성 변경 (AUTH_SETATTRLIST)"
+          }
+        }
+      }
+    },
     "Audit" : {
       "localizations" : {
         "ko" : {
@@ -853,12 +1241,12 @@
         }
       }
     },
-    "Based on the loaded records, opens from these programs would be denied: %@." : {
+    "Average check time" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "불러온 기록 기준으로 다음 프로그램의 열기 요청이 거부됩니다: %@."
+            "value" : "평균 검사 시간"
           }
         }
       }
@@ -873,12 +1261,42 @@
         }
       }
     },
-    "Blacklist" : {
+    "Block %lld" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "블랙리스트"
+            "value" : "차단 %lld개"
+          }
+        }
+      }
+    },
+    "Blocked Program" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "차단된 프로그램"
+          }
+        }
+      }
+    },
+    "Blocked program in the execution history" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "실행 이력에 차단할 프로그램이 있음"
+          }
+        }
+      }
+    },
+    "Both copies of the saved policies are unreadable. Their programs can’t be restored." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "저장된 정책의 두 사본을 모두 읽을 수 없습니다. 등록했던 프로그램은 복원할 수 없습니다."
           }
         }
       }
@@ -939,16 +1357,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%1$@ 기록 · %2$@부터 수집"
-          }
-        }
-      }
-    },
-    "Change to %@?" : {
-      "localizations" : {
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@으로 바꿀까요?"
           }
         }
       }
@@ -1028,17 +1436,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "하위 프로세스 생성 관찰됨"
-          }
-        }
-      }
-    },
-    "Choose Application…" : {
-      "localizations" : {
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "응용 프로그램 선택…"
+            "value" : "자식 프로세스 생성 관찰됨"
           }
         }
       }
@@ -1103,6 +1501,16 @@
         }
       }
     },
+    "Clone (AUTH_CLONE)" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "복제 (AUTH_CLONE)"
+          }
+        }
+      }
+    },
     "Code Signature" : {
       "localizations" : {
         "ko" : {
@@ -1133,32 +1541,22 @@
         }
       }
     },
-    "Compatibility profile %@ is inactive: %@" : {
+    "Compatibility profile “%@” can’t be turned on: %@" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "호환성 프로필(%@)이 비활성 상태입니다: %@"
+            "value" : "켤 수 없는 호환성 프로필 ‘%@’: %@"
           }
         }
       }
     },
-    "Compatibility profiles apply only to Whitelist policies." : {
+    "Compatibility profile “%@” is inactive: %@" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "호환성 프로필은 화이트리스트 정책에만 쓸 수 있습니다."
-          }
-        }
-      }
-    },
-    "Compatibility profiles can’t be changed until the app and extension use the same built-in definitions." : {
-      "localizations" : {
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "앱과 확장 프로그램의 내장 정의가 같아질 때까지 호환성 프로필을 바꿀 수 없습니다."
+            "value" : "비활성 상태인 호환성 프로필 ‘%@’: %@"
           }
         }
       }
@@ -1168,7 +1566,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "서로 맞지 않는 순환 관계가 관찰되어 하나의 조상 계열로 다루지 않았습니다."
+            "value" : "서로 맞지 않는 순환 관계가 관찰되어 하나의 조상 프로세스 사슬로 다루지 않았습니다."
           }
         }
       }
@@ -1203,6 +1601,76 @@
         }
       }
     },
+    "Converted from an earlier format" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이전 형식에서 변환됨"
+          }
+        }
+      }
+    },
+    "Copy (AUTH_COPYFILE)" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "복사 (AUTH_COPYFILE)"
+          }
+        }
+      }
+    },
+    "Copy Access Process Name" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "접근 프로세스 이름 복사"
+          }
+        }
+      }
+    },
+    "Copy Path" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "경로 복사"
+          }
+        }
+      }
+    },
+    "Copy Program Name" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "프로그램 이름 복사"
+          }
+        }
+      }
+    },
+    "Copy Responsible Process Name" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "책임 프로세스 이름 복사"
+          }
+        }
+      }
+    },
+    "Copy Signing Identifier" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "서명 식별자 복사"
+          }
+        }
+      }
+    },
     "Could not refresh extension versions: %@" : {
       "localizations" : {
         "ko" : {
@@ -1219,6 +1687,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "로그인 등록을 제거하지 못했습니다: %@"
+          }
+        }
+      }
+    },
+    "Create (AUTH_CREATE)" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "생성 (AUTH_CREATE)"
           }
         }
       }
@@ -1273,6 +1751,26 @@
         }
       }
     },
+    "Damaged; denying every request" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "손상됨, 모든 요청 거부 중"
+          }
+        }
+      }
+    },
+    "Data exchange (AUTH_EXCHANGEDATA)" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "데이터 교환 (AUTH_EXCHANGEDATA)"
+          }
+        }
+      }
+    },
     "Deactivate" : {
       "localizations" : {
         "ko" : {
@@ -1313,12 +1811,62 @@
         }
       }
     },
-    "Delete All Rules and Change" : {
+    "Deadline setting error: %@" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "규칙을 모두 지우고 바꾸기"
+            "value" : "기한 설정 오류: %@"
+          }
+        }
+      }
+    },
+    "Deadline shortening error: %@" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "기한 단축 오류: %@"
+          }
+        }
+      }
+    },
+    "Decided under revision %llu · Current revision %llu" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "리비전 %llu에서 판정 · 현재 리비전 %llu"
+          }
+        }
+      }
+    },
+    "Decision" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "판정"
+          }
+        }
+      }
+    },
+    "Decision of “%@”" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "‘%@’ 정책의 판정"
+          }
+        }
+      }
+    },
+    "Delete (AUTH_UNLINK)" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "삭제 (AUTH_UNLINK)"
           }
         }
       }
@@ -1353,6 +1901,16 @@
         }
       }
     },
+    "Denial records among them" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "그중 거부 기록"
+          }
+        }
+      }
+    },
     "Denied" : {
       "localizations" : {
         "ko" : {
@@ -1373,12 +1931,42 @@
         }
       }
     },
+    "Denied (missed deadline)" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "거부됨(기한 초과)"
+          }
+        }
+      }
+    },
     "Deny" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "거부"
+          }
+        }
+      }
+    },
+    "Deny the request" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "요청 거부"
+          }
+        }
+      }
+    },
+    "Destination" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "대상 위치"
           }
         }
       }
@@ -1433,6 +2021,16 @@
         }
       }
     },
+    "Discarded process entries" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "버린 프로세스 항목"
+          }
+        }
+      }
+    },
     "Done" : {
       "localizations" : {
         "ko" : {
@@ -1443,12 +2041,52 @@
         }
       }
     },
-    "Drag an application here" : {
+    "Drag an app or executable here" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "응용 프로그램을 여기로 끌어다 놓으세요"
+            "value" : "앱이나 실행 파일을 여기로 끌어다 놓으세요"
+          }
+        }
+      }
+    },
+    "Dropped messages (all kinds)" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "메시지 유실(전체)"
+          }
+        }
+      }
+    },
+    "Dropped messages (all kinds): %llu. Process changes among them can’t be reconstructed." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "메시지 유실(전체): %llu건. 그 사이의 프로세스 변화는 복원할 수 없습니다."
+          }
+        }
+      }
+    },
+    "Duplicate Policy" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "정책 복제"
+          }
+        }
+      }
+    },
+    "Earlier revision" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이전 리비전"
           }
         }
       }
@@ -1533,26 +2171,6 @@
         }
       }
     },
-    "Everything this program starts can open the files too, including commands run in a shell." : {
-      "localizations" : {
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "이 프로그램이 실행한 모든 것도 파일을 열 수 있게 됩니다. 셸에서 실행한 명령도 포함됩니다."
-          }
-        }
-      }
-    },
-    "Everything this program starts is blocked too, including helpers other apps share." : {
-      "localizations" : {
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "이 프로그램이 실행한 모든 것도 차단됩니다. 다른 앱과 함께 쓰는 도우미 프로그램도 포함됩니다."
-          }
-        }
-      }
-    },
     "Executable" : {
       "localizations" : {
         "ko" : {
@@ -1573,12 +2191,12 @@
         }
       }
     },
-    "Execution Path" : {
+    "Execution History" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "실행 경로"
+            "value" : "실행 이력"
           }
         }
       }
@@ -1589,6 +2207,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "실행 종료: %@"
+          }
+        }
+      }
+    },
+    "Execution history is incomplete" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "실행 이력이 불완전함"
+          }
+        }
+      }
+    },
+    "Extended attribute change (AUTH_SETEXTATTR)" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "확장 속성 변경 (AUTH_SETEXTATTR)"
+          }
+        }
+      }
+    },
+    "Extended attribute removal (AUTH_DELETEEXTATTR)" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "확장 속성 삭제 (AUTH_DELETEEXTATTR)"
           }
         }
       }
@@ -1623,6 +2271,16 @@
         }
       }
     },
+    "File flags change (AUTH_SETFLAGS)" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "파일 플래그 변경 (AUTH_SETFLAGS)"
+          }
+        }
+      }
+    },
     "File open (AUTH_OPEN)" : {
       "localizations" : {
         "ko" : {
@@ -1633,12 +2291,92 @@
         }
       }
     },
+    "Finder Copy" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Finder 복사"
+          }
+        }
+      }
+    },
+    "Finder can copy items into this folder, and copy its items or the whole folder out of it." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Finder가 이 폴더 안으로 복사하거나, 안의 항목과 폴더 전체를 밖으로 복사할 수 있습니다."
+          }
+        }
+      }
+    },
     "Finish Uninstalling Pasu FS" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Pasu FS 제거 마치기"
+          }
+        }
+      }
+    },
+    "First Program" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "첫 프로그램"
+          }
+        }
+      }
+    },
+    "First destination" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "첫 대상 위치"
+          }
+        }
+      }
+    },
+    "First program and access process are allowed" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "첫 프로그램과 접근 프로세스가 허용됨"
+          }
+        }
+      }
+    },
+    "First program is not allowed" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "첫 프로그램이 허용되지 않음"
+          }
+        }
+      }
+    },
+    "First program is unknown" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "첫 프로그램을 알 수 없음"
+          }
+        }
+      }
+    },
+    "First target" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "첫 대상"
           }
         }
       }
@@ -1683,12 +2421,42 @@
         }
       }
     },
+    "Hard link (AUTH_LINK)" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "하드 링크 (AUTH_LINK)"
+          }
+        }
+      }
+    },
+    "Hide Inspector" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "인스펙터 가리기"
+          }
+        }
+      }
+    },
     "Hide details" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "세부 정보 가리기"
+          }
+        }
+      }
+    },
+    "History resets" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이력 초기화 횟수"
           }
         }
       }
@@ -1713,22 +2481,32 @@
         }
       }
     },
-    "In Blacklist" : {
+    "In Both Lists" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "블랙리스트에 있음"
+            "value" : "두 목록에 있음"
           }
         }
       }
     },
-    "In Whitelist" : {
+    "In Programs to Allow" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "화이트리스트에 있음"
+            "value" : "허용할 프로그램에 있음"
+          }
+        }
+      }
+    },
+    "In Programs to Block" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "차단할 프로그램에 있음"
           }
         }
       }
@@ -1743,22 +2521,42 @@
         }
       }
     },
-    "Include child processes" : {
+    "Inactive because the profile changed. Turn it off and on again." : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "하위 프로세스에도 적용"
+            "value" : "프로필이 바뀌어 비활성 상태입니다. 껐다가 다시 켜세요."
           }
         }
       }
     },
-    "Includes child processes" : {
+    "Inactive because this version doesn’t offer it." : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "하위 프로세스 포함"
+            "value" : "이 버전에서 제공하지 않아 비활성 상태입니다."
+          }
+        }
+      }
+    },
+    "Inactive on this version of macOS." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 macOS 버전에서는 비활성 상태입니다."
+          }
+        }
+      }
+    },
+    "Include descendant processes" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "자손 프로세스 허용"
           }
         }
       }
@@ -1773,12 +2571,12 @@
         }
       }
     },
-    "Inherited from an observed parent process" : {
+    "Inherited from an observed ancestor process" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "관찰된 상위 프로세스에서 이어짐"
+            "value" : "관찰된 조상 프로세스에서 이어짐"
           }
         }
       }
@@ -1813,12 +2611,12 @@
         }
       }
     },
-    "Keep Rules and Change" : {
+    "Last %@" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "규칙을 유지하고 바꾸기"
+            "value" : "마지막 %@"
           }
         }
       }
@@ -1853,6 +2651,16 @@
         }
       }
     },
+    "Last checked" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "마지막 확인"
+          }
+        }
+      }
+    },
     "Last observed %@" : {
       "localizations" : {
         "ko" : {
@@ -1863,12 +2671,72 @@
         }
       }
     },
+    "Last request" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "마지막 요청"
+          }
+        }
+      }
+    },
     "Last update" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "마지막 갱신"
+          }
+        }
+      }
+    },
+    "Latest decision revision" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "마지막 판정 리비전"
+          }
+        }
+      }
+    },
+    "Latest unchecked requests" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "최근 검사되지 않은 요청"
+          }
+        }
+      }
+    },
+    "Lets the macOS malware scanner XProtect read this folder: its remediator plug-ins, running as root or as your user account, while they scan it, and its analysis service, running as root, when Gatekeeper checks an item." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "macOS 악성 코드 검사기 XProtect가 이 폴더를 읽을 수 있게 합니다. root 또는 내 사용자 계정으로 실행되는 제거 플러그인은 검사 중에, root로 실행되는 분석 서비스는 Gatekeeper가 항목을 확인할 때 읽습니다."
+          }
+        }
+      }
+    },
+    "Lets the macOS service that carries out Finder’s copies, duplicates and restores from the Time Machine screen, running as root or as your user account, copy files and folders into and out of this folder." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Finder의 복사·복제와 Time Machine 화면의 복원을 수행하는 macOS 서비스(root 또는 내 사용자 계정으로 실행)가 이 폴더로, 그리고 이 폴더에서 밖으로 파일과 폴더를 복사할 수 있게 합니다."
+          }
+        }
+      }
+    },
+    "Lets the macOS services that prepare an app’s container, some running as your user account, read it so the app can start." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "앱 컨테이너를 준비하는 macOS 서비스(일부는 내 사용자 계정으로 실행)가 컨테이너를 읽어 앱이 시작될 수 있게 합니다."
           }
         }
       }
@@ -1913,6 +2781,16 @@
         }
       }
     },
+    "Log Errors and Warnings" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "기록 오류와 경고"
+          }
+        }
+      }
+    },
     "Log Storage" : {
       "localizations" : {
         "ko" : {
@@ -1953,6 +2831,16 @@
         }
       }
     },
+    "Longest check time" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "가장 긴 검사 시간"
+          }
+        }
+      }
+    },
     "Lost records" : {
       "localizations" : {
         "ko" : {
@@ -1983,6 +2871,26 @@
         }
       }
     },
+    "Maximum deadline" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "최대 기한"
+          }
+        }
+      }
+    },
+    "Missed deadline" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "기한 초과"
+          }
+        }
+      }
+    },
     "Mode" : {
       "localizations" : {
         "ko" : {
@@ -1999,6 +2907,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%@ 추가 동작"
+          }
+        }
+      }
+    },
+    "Mount (AUTH_MOUNT)" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "마운트 (AUTH_MOUNT)"
+          }
+        }
+      }
+    },
+    "Mount point" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "마운트 지점"
+          }
+        }
+      }
+    },
+    "Mounted from" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "마운트 원본"
           }
         }
       }
@@ -2073,6 +3011,26 @@
         }
       }
     },
+    "No Other Policies" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "다른 정책 없음"
+          }
+        }
+      }
+    },
+    "No Programs to Copy" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "복사할 프로그램 없음"
+          }
+        }
+      }
+    },
     "No Recorded Access Yet" : {
       "localizations" : {
         "ko" : {
@@ -2099,6 +3057,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "활성 정책 없음"
+          }
+        }
+      }
+    },
+    "No allow rules are enabled. Active compatibility profiles can still allow requests." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "켜진 허용 규칙이 없습니다. 활성 호환성 프로필은 요청을 허용할 수 있습니다."
+          }
+        }
+      }
+    },
+    "No blocked program in the execution history" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "실행 이력에 차단할 프로그램이 없음"
           }
         }
       }
@@ -2143,22 +3121,12 @@
         }
       }
     },
-    "No program in the loaded records would be denied." : {
+    "No program is allowed" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "불러온 기록에서는 거부될 프로그램이 없습니다."
-          }
-        }
-      }
-    },
-    "No program is allowed. After you save, every open in this folder is denied." : {
-      "localizations" : {
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "허용된 프로그램이 없습니다. 저장하면 이 폴더의 모든 열기 요청이 거부됩니다."
+            "value" : "허용된 프로그램이 없음"
           }
         }
       }
@@ -2253,16 +3221,6 @@
         }
       }
     },
-    "No verified compatibility profiles yet" : {
-      "localizations" : {
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "검증된 호환성 프로필이 아직 없습니다"
-          }
-        }
-      }
-    },
     "None reported by macOS" : {
       "localizations" : {
         "ko" : {
@@ -2279,6 +3237,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "아직 보고 없음"
+          }
+        }
+      }
+    },
+    "Normal" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "정상"
           }
         }
       }
@@ -2309,6 +3277,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "활성화되지 않음"
+          }
+        }
+      }
+    },
+    "Not in Programs to Allow" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "허용할 프로그램에 없음"
           }
         }
       }
@@ -2443,16 +3421,6 @@
         }
       }
     },
-    "Observing" : {
-      "localizations" : {
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "추적 중"
-          }
-        }
-      }
-    },
     "Off" : {
       "localizations" : {
         "ko" : {
@@ -2473,22 +3441,12 @@
         }
       }
     },
-    "One or more turned-on system compatibility profiles need review." : {
+    "On a missed deadline" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "켜 둔 시스템 호환성 프로필 중 검토가 필요한 항목이 있습니다."
-          }
-        }
-      }
-    },
-    "Only the %lld programs in the list will be allowed. The change applies when you save." : {
-      "localizations" : {
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "목록에 있는 프로그램 %lld개만 허용됩니다. 변경은 저장해야 적용됩니다."
+            "value" : "기한을 넘기면"
           }
         }
       }
@@ -2573,22 +3531,12 @@
         }
       }
     },
-    "Opened the file" : {
+    "Order Added" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "파일을 연 프로세스"
-          }
-        }
-      }
-    },
-    "Opened the file · PID %@" : {
-      "localizations" : {
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "파일을 연 프로세스 · PID %@"
+            "value" : "추가한 순서"
           }
         }
       }
@@ -2603,12 +3551,12 @@
         }
       }
     },
-    "Other unsaved changes to this policy are saved too." : {
+    "Other Policy" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "이 정책의 저장하지 않은 다른 변경 사항도 함께 저장됩니다."
+            "value" : "다른 정책"
           }
         }
       }
@@ -2623,12 +3571,22 @@
         }
       }
     },
-    "Parent reported by macOS" : {
+    "Owner change (AUTH_SETOWNER)" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "macOS가 보고한 상위 프로세스"
+            "value" : "소유자 변경 (AUTH_SETOWNER)"
+          }
+        }
+      }
+    },
+    "Parent process reported by macOS" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "macOS가 보고한 부모 프로세스"
           }
         }
       }
@@ -2723,6 +3681,46 @@
         }
       }
     },
+    "Pasu FS’s answer didn’t reach macOS in time, so macOS decided this request." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pasu FS의 응답이 기한 안에 macOS에 도착하지 않아 macOS가 이 요청을 처리했습니다."
+          }
+        }
+      }
+    },
+    "Path registration error: %@" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "경로 등록 오류: %@"
+          }
+        }
+      }
+    },
+    "Permission Source" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "권한을 전달한 프로그램"
+          }
+        }
+      }
+    },
+    "Permissions change (AUTH_SETMODE)" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "권한 변경 (AUTH_SETMODE)"
+          }
+        }
+      }
+    },
     "Policies" : {
       "localizations" : {
         "ko" : {
@@ -2773,12 +3771,12 @@
         }
       }
     },
-    "Policy changed" : {
+    "Policy digest" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "정책 변경됨"
+            "value" : "정책 검증값"
           }
         }
       }
@@ -2843,12 +3841,22 @@
         }
       }
     },
-    "Policy unavailable" : {
+    "Policy storage" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "정책 없음"
+            "value" : "정책 저장 상태"
+          }
+        }
+      }
+    },
+    "Previous descendant settings are off. Enable them for each program you trust." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이전 자손 설정은 꺼져 있습니다. 신뢰하는 프로그램별로 켜십시오."
           }
         }
       }
@@ -2863,22 +3871,22 @@
         }
       }
     },
-    "Process" : {
+    "Process Chain" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "프로세스"
+            "value" : "프로세스 사슬"
           }
         }
       }
     },
-    "Process History" : {
+    "Process Lineage" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "프로세스 이력"
+            "value" : "프로세스 계보"
           }
         }
       }
@@ -2903,22 +3911,22 @@
         }
       }
     },
-    "Process history did not fit within the pending-work budget." : {
+    "Process lineage did not fit within the pending-work budget." : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "프로세스 이력이 대기 작업 예산 안에 들어가지 않았습니다."
+            "value" : "프로세스 계보가 대기 작업 예산 안에 들어가지 않았습니다."
           }
         }
       }
     },
-    "Process history was left out to keep the access record under load." : {
+    "Process lineage was left out to keep the access record under load." : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "부하가 커서 접근 기록을 지키려고 프로세스 이력을 뺐습니다."
+            "value" : "부하가 커서 접근 기록을 지키려고 프로세스 계보를 뺐습니다."
           }
         }
       }
@@ -2953,6 +3961,16 @@
         }
       }
     },
+    "Programs it starts can also access this folder." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 프로그램이 실행하는 하위 프로그램도 이 폴더에 접근할 수 있습니다."
+          }
+        }
+      }
+    },
     "Programs to Allow" : {
       "localizations" : {
         "ko" : {
@@ -2969,6 +3987,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "차단할 프로그램"
+          }
+        }
+      }
+    },
+    "Programs with incomplete execution history can be denied access to protected folders until reopened." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "실행 이력이 불완전한 프로그램은 다시 열기 전까지 보호 폴더 접근이 거부될 수 있습니다."
           }
         }
       }
@@ -3073,12 +4101,12 @@
         }
       }
     },
-    "Quit Pasu FS normally, then run the installer or uninstaller again. Protection continues when the app quits. Another login session may also have Pasu FS open." : {
+    "Quit Pasu FS normally, then run the installer again or start uninstalling again from the app. Protection continues when the app quits. Another login session may also have Pasu FS open." : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Pasu FS를 평소처럼 종료한 뒤 설치 또는 제거를 다시 실행하세요. 앱을 종료해도 보호는 계속됩니다. 다른 로그인 세션에서 Pasu FS가 열려 있을 수도 있습니다."
+            "value" : "Pasu FS를 평소처럼 종료한 뒤 설치 프로그램을 다시 실행하거나 앱에서 제거를 다시 시작하세요. 앱을 종료해도 보호는 계속됩니다. 다른 로그인 세션에서 Pasu FS가 열려 있을 수도 있습니다."
           }
         }
       }
@@ -3143,12 +4171,12 @@
         }
       }
     },
-    "Records saved without process history" : {
+    "Records saved without process lineage" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "프로세스 이력 없이 저장한 기록"
+            "value" : "프로세스 계보 없이 저장한 기록"
           }
         }
       }
@@ -3193,6 +4221,46 @@
         }
       }
     },
+    "Refreshing" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "새로 고치는 중"
+          }
+        }
+      }
+    },
+    "Registered exact paths" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "등록한 정확한 경로"
+          }
+        }
+      }
+    },
+    "Registered path prefixes" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "등록한 경로 접두사"
+          }
+        }
+      }
+    },
+    "Registered paths only" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "등록한 경로만"
+          }
+        }
+      }
+    },
     "Registration with macOS" : {
       "localizations" : {
         "ko" : {
@@ -3223,40 +4291,22 @@
         }
       }
     },
-    "Removed %lld compatibility settings that no longer apply." : {
-      "localizations" : {
-        "en" : {
-          "variations" : {
-            "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "Removed %lld compatibility setting that no longer applies."
-                }
-              },
-              "other" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "Removed %lld compatibility settings that no longer apply."
-                }
-              }
-            }
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "더 이상 쓰이지 않는 호환성 설정 %lld개를 지웠습니다."
-          }
-        }
-      }
-    },
     "Removing the login registration…" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "로그인 등록을 제거하는 중…"
+          }
+        }
+      }
+    },
+    "Rename or move (AUTH_RENAME)" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이름 변경 또는 이동 (AUTH_RENAME)"
           }
         }
       }
@@ -3281,22 +4331,42 @@
         }
       }
     },
+    "Request delivery" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "요청 전달"
+          }
+        }
+      }
+    },
+    "Requests" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "요청 수"
+          }
+        }
+      }
+    },
+    "Requests evaluated" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "검사한 요청"
+          }
+        }
+      }
+    },
     "Response" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "응답"
-          }
-        }
-      }
-    },
-    "Response Error" : {
-      "localizations" : {
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "응답 오류"
           }
         }
       }
@@ -3317,16 +4387,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "기한 이후에 끝난 응답"
-          }
-        }
-      }
-    },
-    "Responsibility outside the process’s ancestors" : {
-      "localizations" : {
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "조상 계열 밖의 책임 관계"
           }
         }
       }
@@ -3357,6 +4417,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "책임 프로세스 · PID %@"
+          }
+        }
+      }
+    },
+    "Responsible processes outside the ancestor chain" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "조상 프로세스 사슬 밖의 책임 프로세스"
           }
         }
       }
@@ -3401,6 +4471,66 @@
         }
       }
     },
+    "Restored from the verified copy" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "검증된 사본에서 복구됨"
+          }
+        }
+      }
+    },
+    "Retired Path" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "종전 경로"
+          }
+        }
+      }
+    },
+    "Retired Paths" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "종전 경로"
+          }
+        }
+      }
+    },
+    "Retired path" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "종전 경로"
+          }
+        }
+      }
+    },
+    "Retired path: %@" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "종전 경로: %@"
+          }
+        }
+      }
+    },
+    "Retired paths" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "종전 경로"
+          }
+        }
+      }
+    },
     "Revert" : {
       "localizations" : {
         "ko" : {
@@ -3417,16 +4547,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "저장된 상태로 되돌리기"
-          }
-        }
-      }
-    },
-    "Review and Turn On" : {
-      "localizations" : {
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "검토 후 켜기"
           }
         }
       }
@@ -3471,6 +4591,16 @@
         }
       }
     },
+    "Running until restart" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "재시동 전까지 실행 중"
+          }
+        }
+      }
+    },
     "Runtime" : {
       "localizations" : {
         "ko" : {
@@ -3501,6 +4631,16 @@
         }
       }
     },
+    "Save Policy…" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "정책 저장…"
+          }
+        }
+      }
+    },
     "Save This Policy to Start Its Log" : {
       "localizations" : {
         "ko" : {
@@ -3521,32 +4661,12 @@
         }
       }
     },
-    "Save this policy before changing its compatibility profiles." : {
+    "Saved as revision %llu. The extension has not confirmed that it is in effect." : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "호환성 프로필을 바꾸기 전에 이 정책을 저장하세요."
-          }
-        }
-      }
-    },
-    "Save this policy first." : {
-      "localizations" : {
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "먼저 이 정책을 저장하세요."
-          }
-        }
-      }
-    },
-    "Saved system compatibility settings could not be read, validated or trusted. No compatibility profile is active." : {
-      "localizations" : {
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "저장된 시스템 호환성 설정을 읽거나 검증하거나 신뢰할 수 없습니다. 활성화된 호환성 프로필이 없습니다."
+            "value" : "저장했습니다 (리비전 %llu). 확장 프로그램이 적용을 아직 확인하지 않았습니다."
           }
         }
       }
@@ -3557,6 +4677,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "저장했습니다. 정책을 적용했습니다 (리비전 %llu)."
+          }
+        }
+      }
+    },
+    "Save…" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "저장…"
+          }
+        }
+      }
+    },
+    "Saving the policy releases it." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "정책을 저장하면 해제됩니다."
+          }
+        }
+      }
+    },
+    "Saving the policy releases them." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "정책을 저장하면 해제됩니다."
           }
         }
       }
@@ -3689,6 +4839,16 @@
         }
       }
     },
+    "Shortest time left before the deadline" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "기한까지 남은 가장 짧은 시간"
+          }
+        }
+      }
+    },
     "Show" : {
       "localizations" : {
         "ko" : {
@@ -3715,6 +4875,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "확장 프로그램 설정 보기…"
+          }
+        }
+      }
+    },
+    "Show Inspector" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "인스펙터 보기"
+          }
+        }
+      }
+    },
+    "Show Policy" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "정책 보기"
           }
         }
       }
@@ -3749,6 +4929,16 @@
         }
       }
     },
+    "Show log errors and warnings" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "기록 오류와 경고 보기"
+          }
+        }
+      }
+    },
     "Show the protected folder in Finder" : {
       "localizations" : {
         "ko" : {
@@ -3765,6 +4955,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "서명"
+          }
+        }
+      }
+    },
+    "Signature Kind and Team ID" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "서명 종류와 팀 ID"
           }
         }
       }
@@ -3809,12 +5009,32 @@
         }
       }
     },
+    "Sort Programs By" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "프로그램 정렬 기준"
+          }
+        }
+      }
+    },
     "Source" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "추가 방법"
+          }
+        }
+      }
+    },
+    "Started by launchd before tracking" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "추적 전에 launchd가 시작한 프로세스"
           }
         }
       }
@@ -3835,6 +5055,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Endpoint Security 클라이언트를 시작하는 중입니다."
+          }
+        }
+      }
+    },
+    "Starts after restart" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "재시동 후 시작 예정"
           }
         }
       }
@@ -3909,6 +5139,16 @@
         }
       }
     },
+    "Stop the extension" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "확장 프로그램 중지"
+          }
+        }
+      }
+    },
     "Stopped" : {
       "localizations" : {
         "ko" : {
@@ -3925,36 +5165,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "보호를 중단하는 중…"
-          }
-        }
-      }
-    },
-    "Switch and Save" : {
-      "localizations" : {
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "전환하고 저장"
-          }
-        }
-      }
-    },
-    "Switch to Protection?" : {
-      "localizations" : {
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "보호 모드로 전환할까요?"
-          }
-        }
-      }
-    },
-    "Switch to Protection…" : {
-      "localizations" : {
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "보호 모드로 전환…"
           }
         }
       }
@@ -3999,12 +5209,12 @@
         }
       }
     },
-    "System compatibility profile %@" : {
+    "System intermediary (%@)" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "시스템 호환성 프로필 %@"
+            "value" : "시스템 중개 프로세스(%@)"
           }
         }
       }
@@ -4025,16 +5235,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "팀 ID"
-          }
-        }
-      }
-    },
-    "The %lld programs in the list will be denied instead of allowed. The change applies when you save." : {
-      "localizations" : {
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "목록에 있는 프로그램 %lld개가 허용 대신 거부됩니다. 변경은 저장해야 적용됩니다."
           }
         }
       }
@@ -4089,32 +5289,12 @@
         }
       }
     },
-    "The app and extension must use the same built-in definitions." : {
-      "localizations" : {
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "앱과 확장 프로그램의 내장 정의가 같아야 합니다."
-          }
-        }
-      }
-    },
     "The app and extension use different configuration versions (app %lld, extension %lld). Install a matching package." : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "앱과 확장 프로그램의 설정 방식 버전이 다릅니다(앱 %lld, 확장 프로그램 %lld). 버전이 맞는 패키지를 설치하세요."
-          }
-        }
-      }
-    },
-    "The app and extension use different system compatibility definitions. You can still edit policies, but compatibility profiles can’t be changed until matching versions are installed." : {
-      "localizations" : {
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "앱과 확장 프로그램의 시스템 호환성 정의가 다릅니다. 정책은 계속 편집할 수 있지만, 버전이 맞는 패키지를 설치하기 전까지 호환성 프로필은 바꿀 수 없습니다."
           }
         }
       }
@@ -4219,32 +5399,22 @@
         }
       }
     },
-    "The change is saved and applied right away." : {
+    "The complete process lineage exceeded the log file limit and could not be stored." : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "변경은 바로 저장되고 적용됩니다."
+            "value" : "전체 프로세스 계보가 기록 파일 한도를 넘어 저장하지 못했습니다."
           }
         }
       }
     },
-    "The compatibility settings revision counter has reached its limit." : {
+    "The connection to the extension was interrupted before it replied." : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "호환성 설정 리비전 번호가 한도에 도달했습니다."
-          }
-        }
-      }
-    },
-    "The complete process history exceeded the log file limit and could not be stored." : {
-      "localizations" : {
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "전체 프로세스 이력이 기록 파일 한도를 넘어 저장하지 못했습니다."
+            "value" : "확장 프로그램과의 연결이 응답 전에 끊어졌습니다."
           }
         }
       }
@@ -4289,16 +5459,6 @@
         }
       }
     },
-    "The extension confirmed different compatibility settings." : {
-      "localizations" : {
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "확장 프로그램이 다른 호환성 설정을 확인했습니다."
-          }
-        }
-      }
-    },
     "The extension connection check failed." : {
       "localizations" : {
         "ko" : {
@@ -4319,12 +5479,22 @@
         }
       }
     },
-    "The extension could not subscribe to process history events." : {
+    "The extension could not subscribe to process lineage events." : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "확장 프로그램이 프로세스 이력 이벤트를 구독하지 못했습니다."
+            "value" : "확장 프로그램이 프로세스 계보 이벤트를 구독하지 못했습니다."
+          }
+        }
+      }
+    },
+    "The extension did not reply and did not store the change. Try again." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "확장 프로그램이 응답하지 않았고 변경 사항도 저장하지 않았습니다. 다시 시도하세요."
           }
         }
       }
@@ -4349,6 +5519,16 @@
         }
       }
     },
+    "The extension did not reply to the last save. Pasu FS is checking whether it was stored before saving again." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "확장 프로그램이 마지막 저장에 응답하지 않았습니다. 다시 저장하기 전에 Pasu FS가 저장 여부를 확인하고 있습니다."
+          }
+        }
+      }
+    },
     "The extension is installed but not running. Files are not protected." : {
       "localizations" : {
         "ko" : {
@@ -4359,22 +5539,22 @@
         }
       }
     },
+    "The extension isn’t responding (last status %@ ago). Restart this Mac." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "확장 프로그램이 응답하지 않습니다(마지막 상태 %@ 전). 이 Mac을 재시동하세요."
+          }
+        }
+      }
+    },
     "The extension rejected the policies: %@" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "확장 프로그램이 정책을 거부했습니다: %@"
-          }
-        }
-      }
-    },
-    "The extension rejected the system compatibility settings: %@" : {
-      "localizations" : {
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "확장 프로그램이 시스템 호환성 설정을 거부했습니다: %@"
           }
         }
       }
@@ -4449,6 +5629,66 @@
         }
       }
     },
+    "The extension still answers, so protection continues." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "확장 프로그램이 계속 응답하므로 보호는 유지됩니다."
+          }
+        }
+      }
+    },
+    "The extension still answers." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "확장 프로그램은 계속 응답합니다."
+          }
+        }
+      }
+    },
+    "The extension stores a different policy set. Pasu FS is loading the saved policies again." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "확장 프로그램에 다른 정책 세트가 저장되어 있습니다. Pasu FS가 저장된 정책을 다시 불러옵니다."
+          }
+        }
+      }
+    },
+    "The extension that is running keeps checking requests until this Mac restarts. macOS then starts %@." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "실행 중인 확장 프로그램은 이 Mac을 재시동할 때까지 요청을 계속 검사합니다. 재시동하면 macOS가 %@ 버전을 시작합니다."
+          }
+        }
+      }
+    },
+    "The extension update finishes when you restart this Mac." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 Mac을 재시동하면 확장 프로그램 업데이트가 끝납니다."
+          }
+        }
+      }
+    },
+    "The extension was updated. Restarting this Mac is recommended." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "확장 프로그램이 업데이트되었습니다. Mac을 재시동하는 것이 좋습니다."
+          }
+        }
+      }
+    },
     "The folder doesn’t exist." : {
       "localizations" : {
         "ko" : {
@@ -4465,6 +5705,46 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "설치 경로를 확인할 수 없습니다."
+          }
+        }
+      }
+    },
+    "The installation state check could not start: %@" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "설치 상태 확인을 시작할 수 없습니다: %@"
+          }
+        }
+      }
+    },
+    "The installation state check ended with status %lld without an answer." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "설치 상태 확인이 결과 없이 끝났습니다(종료 상태 %lld)."
+          }
+        }
+      }
+    },
+    "The installation state check returned an unreadable result." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "설치 상태 확인이 읽을 수 없는 결과를 보냈습니다."
+          }
+        }
+      }
+    },
+    "The installation state check was ended by signal %lld." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "설치 상태 확인이 중단되었습니다(신호 %lld)."
           }
         }
       }
@@ -4629,6 +5909,16 @@
         }
       }
     },
+    "The mount point covers this policy’s folder" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "마운트 지점이 이 정책의 폴더를 덮음"
+          }
+        }
+      }
+    },
     "The old single-policy file could not be removed and was not applied: %@" : {
       "localizations" : {
         "ko" : {
@@ -4674,7 +5964,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "상위 실행의 신원을 알 수 없어 여기서 사슬을 이어 갈 수 없습니다."
+            "value" : "부모 프로세스의 실행 신원을 알 수 없어 여기서 사슬을 이어 갈 수 없습니다."
           }
         }
       }
@@ -4729,22 +6019,42 @@
         }
       }
     },
-    "The process history data budget ran out, so some observations were not kept." : {
+    "The primary copy could not be repaired: %@" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "프로세스 이력 데이터 예산이 모자라 일부 관찰 내용을 남기지 못했습니다."
+            "value" : "기본 사본을 복구하지 못했습니다: %@"
           }
         }
       }
     },
-    "The process history queue could not accept some observations." : {
+    "The primary copy was unreadable and has been repaired." : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "프로세스 이력 대기열이 일부 관찰 내용을 받지 못했습니다."
+            "value" : "읽을 수 없던 기본 사본을 복구했습니다."
+          }
+        }
+      }
+    },
+    "The process lineage data budget ran out, so some observations were not kept." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "프로세스 계보 데이터 예산이 모자라 일부 관찰 내용을 남기지 못했습니다."
+          }
+        }
+      }
+    },
+    "The process lineage queue could not accept some observations." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "프로세스 계보 대기열이 일부 관찰 내용을 받지 못했습니다."
           }
         }
       }
@@ -4755,6 +6065,46 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "제품 데이터 폴더를 삭제할 수 없습니다."
+          }
+        }
+      }
+    },
+    "The program changed without an observed execution change." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "실행 파일 교체가 관찰되지 않았는데 프로그램이 바뀌었습니다."
+          }
+        }
+      }
+    },
+    "The programs of this policy were lost. Add them again and save every policy." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 정책에 등록했던 프로그램이 유실되었습니다. 프로그램을 다시 추가하고 모든 정책을 저장하세요."
+          }
+        }
+      }
+    },
+    "The program’s code signature is invalid." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "프로그램의 코드 서명이 유효하지 않습니다."
+          }
+        }
+      }
+    },
+    "The protected folders could not be checked: %@" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "보호 폴더를 확인하지 못했습니다: %@"
           }
         }
       }
@@ -4799,6 +6149,16 @@
         }
       }
     },
+    "The request acts on a folder that contains this policy’s folder" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "요청이 이 정책의 폴더를 포함하는 폴더에 작용함"
+          }
+        }
+      }
+    },
     "The request will finish after the Mac restarts." : {
       "localizations" : {
         "ko" : {
@@ -4815,6 +6175,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "실행 중인 확장 프로그램은 정책 기록을 지원하지 않습니다. 이 탭을 보려면 확장 프로그램을 업데이트하세요."
+          }
+        }
+      }
+    },
+    "The running extension did not report support for the allow and block lists. Update the extension before saving policies." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "실행 중인 확장 프로그램이 허용·차단 목록 지원을 보고하지 않았습니다. 정책을 저장하기 전에 확장 프로그램을 업데이트하세요."
           }
         }
       }
@@ -4849,6 +6219,26 @@
         }
       }
     },
+    "The saved policies are damaged. Protection policies deny every request in their folders until the policies are saved again." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "저장된 정책이 손상되었습니다. 정책을 다시 저장할 때까지 보호 정책은 해당 폴더의 모든 요청을 거부합니다."
+          }
+        }
+      }
+    },
+    "The saved policies changed after they were loaded. Save again once they reload." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "정책을 불러온 뒤 저장된 정책이 바뀌었습니다. 다시 불러온 다음 저장하세요."
+          }
+        }
+      }
+    },
     "The saved policies changed while you were editing. Your unsaved changes were kept; saving replaces only the selected policy in the latest saved policies." : {
       "localizations" : {
         "ko" : {
@@ -4879,6 +6269,26 @@
         }
       }
     },
+    "The saved policies could not be recovered, so their folders are not protected." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "저장된 정책을 복구하지 못해 해당 폴더가 보호되지 않습니다."
+          }
+        }
+      }
+    },
+    "The saved policies were converted from an earlier format. Programs started by an allowed program are no longer allowed automatically." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "저장된 정책을 이전 형식에서 변환했습니다. 허용된 프로그램이 실행한 프로그램은 더 이상 자동으로 허용되지 않습니다."
+          }
+        }
+      }
+    },
     "The saved policies were rejected: %@" : {
       "localizations" : {
         "ko" : {
@@ -4889,12 +6299,12 @@
         }
       }
     },
-    "The selected compatibility profile is not in the built-in definitions." : {
+    "The saved policies were restored from their verified copy." : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "선택한 호환성 프로필이 내장 정의에 없습니다."
+            "value" : "저장된 정책을 검증된 사본에서 복구했습니다."
           }
         }
       }
@@ -4919,32 +6329,12 @@
         }
       }
     },
-    "The system compatibility profile was turned off." : {
+    "The tracked execution history reached its limit and was reset." : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "시스템 호환성 프로필을 껐습니다."
-          }
-        }
-      }
-    },
-    "The system compatibility profile was turned on." : {
-      "localizations" : {
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "시스템 호환성 프로필을 켰습니다."
-          }
-        }
-      }
-    },
-    "The system compatibility state could not be read: %@" : {
-      "localizations" : {
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "시스템 호환성 상태를 읽지 못했습니다: %@"
+            "value" : "추적하던 실행 이력이 한도에 도달해 초기화되었습니다."
           }
         }
       }
@@ -5029,16 +6419,6 @@
         }
       }
     },
-    "This Audit policy blocks nothing." : {
-      "localizations" : {
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "관찰 모드입니다. 아무것도 차단하지 않습니다."
-          }
-        }
-      }
-    },
     "This Policy" : {
       "localizations" : {
         "ko" : {
@@ -5049,12 +6429,22 @@
         }
       }
     },
-    "This app has no Team ID. Only developer-signed apps and Apple platform binaries can be added." : {
+    "This app includes a newer extension than %@. After the restart, open Pasu FS to update the extension again; that update also finishes with a restart." : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "이 앱에는 팀 ID가 없습니다. 개발자 서명 앱과 Apple 플랫폼 바이너리만 추가할 수 있습니다."
+            "value" : "이 앱에는 %@보다 새로운 확장 프로그램이 들어 있습니다. 재시동한 뒤 Pasu FS를 열면 확장 프로그램을 다시 업데이트하며, 그 업데이트도 재시동해야 끝납니다."
+          }
+        }
+      }
+    },
+    "This change reduces protection and needs administrator authentication: %@" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 변경은 보호를 줄이므로 관리자 인증이 필요합니다: %@"
           }
         }
       }
@@ -5064,7 +6454,17 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "이 이벤트 버전에는 상위·책임 프로세스 신원이 없습니다."
+            "value" : "이 이벤트 버전에는 부모·책임 프로세스 신원이 없습니다."
+          }
+        }
+      }
+    },
+    "This execution began before the extension started tracking processes." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "확장 프로그램이 프로세스를 추적하기 전에 시작된 실행입니다."
           }
         }
       }
@@ -5079,12 +6479,32 @@
         }
       }
     },
-    "This older collector could count local queue losses again as macOS delivery gaps. These two counts may overlap." : {
+    "This history begins with a process that launchd started before the extension started tracking processes." : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "이 이전 수집기는 로컬 대기열 손실을 macOS 전달 공백으로 다시 셀 수 있습니다. 두 수치가 겹칠 수 있습니다."
+            "value" : "이 이력은 확장 프로그램이 프로세스를 추적하기 전에 launchd가 시작한 프로세스에서 시작합니다."
+          }
+        }
+      }
+    },
+    "This macOS event version does not number its process events." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 macOS 이벤트 버전은 프로세스 이벤트에 순번을 매기지 않습니다."
+          }
+        }
+      }
+    },
+    "This older collector could count local queue losses again as dropped messages. These two counts may overlap." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 이전 수집기는 로컬 대기열 손실을 메시지 유실로 다시 셀 수 있습니다. 두 수치가 겹칠 수 있습니다."
           }
         }
       }
@@ -5109,22 +6529,42 @@
         }
       }
     },
-    "This program already has a rule in this policy." : {
+    "This program is already in this list." : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "이 정책에 이 프로그램의 규칙이 이미 있습니다."
+            "value" : "이 프로그램은 이미 이 목록에 있습니다."
           }
         }
       }
     },
-    "This record does not include process history." : {
+    "This program is unsigned or ad-hoc signed. Only developer-signed programs and Apple platform binaries can be added." : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "이 기록에는 프로세스 이력이 없습니다."
+            "value" : "서명이 없거나 임시(ad-hoc) 서명된 프로그램입니다. 개발자 서명 프로그램과 Apple 플랫폼 바이너리만 추가할 수 있습니다."
+          }
+        }
+      }
+    },
+    "This record does not include process lineage." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 기록에는 프로세스 계보가 없습니다."
+          }
+        }
+      }
+    },
+    "This record has no first-program evidence." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 기록에는 첫 프로그램 근거가 없습니다."
           }
         }
       }
@@ -5149,22 +6589,62 @@
         }
       }
     },
-    "Turn Off" : {
+    "Time change (AUTH_UTIMES)" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "끄기"
+            "value" : "시각 변경 (AUTH_UTIMES)"
           }
         }
       }
     },
-    "Turn On" : {
+    "Tracked data" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "켜기"
+            "value" : "추적 데이터"
+          }
+        }
+      }
+    },
+    "Tracked processes" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "추적 중인 프로세스"
+          }
+        }
+      }
+    },
+    "Tracking" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "추적 중"
+          }
+        }
+      }
+    },
+    "Tracking started" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "추적 시작 시각"
+          }
+        }
+      }
+    },
+    "Truncate (AUTH_TRUNCATE)" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "길이 자르기 (AUTH_TRUNCATE)"
           }
         }
       }
@@ -5189,22 +6669,22 @@
         }
       }
     },
-    "Type" : {
-      "localizations" : {
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "방식"
-          }
-        }
-      }
-    },
     "Unavailable" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "사용할 수 없음"
+          }
+        }
+      }
+    },
+    "Unchecked requests (upper estimate)" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "검사되지 않은 요청(최대 추정치)"
           }
         }
       }
@@ -5329,12 +6809,32 @@
         }
       }
     },
+    "Until then, the extension that was running before the update keeps checking requests." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "그때까지는 업데이트 전부터 실행 중이던 확장 프로그램이 요청을 계속 검사합니다."
+          }
+        }
+      }
+    },
     "Untitled Policy" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "이름 없는 정책"
+          }
+        }
+      }
+    },
+    "Update waiting for restart" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "재시동 후 업데이트 예정"
           }
         }
       }
@@ -5479,12 +6979,12 @@
         }
       }
     },
-    "Whitelist" : {
+    "Warning" : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "화이트리스트"
+            "value" : "경고"
           }
         }
       }
@@ -5519,6 +7019,16 @@
         }
       }
     },
+    "XProtect Malware Scanning" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "XProtect 악성 코드 검사"
+          }
+        }
+      }
+    },
     "You can create up to %lld policies." : {
       "localizations" : {
         "ko" : {
@@ -5549,6 +7059,34 @@
         }
       }
     },
+    "macOS allowed up to %llu requests without asking Pasu FS during this run." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "macOS allowed up to %llu request without asking Pasu FS during this run."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "macOS allowed up to %llu requests without asking Pasu FS during this run."
+                }
+              }
+            }
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이번 실행 중 macOS가 Pasu FS에 묻지 않고 최대 %llu건의 요청을 허용했습니다."
+          }
+        }
+      }
+    },
     "macOS completed the request." : {
       "localizations" : {
         "ko" : {
@@ -5559,12 +7097,60 @@
         }
       }
     },
+    "macOS denied up to %llu requests without asking Pasu FS during this run." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "macOS denied up to %llu request without asking Pasu FS during this run."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "macOS denied up to %llu requests without asking Pasu FS during this run."
+                }
+              }
+            }
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이번 실행 중 macOS가 Pasu FS에 묻지 않고 최대 %llu건의 요청을 거부했습니다."
+          }
+        }
+      }
+    },
+    "macOS did not deliver some process events." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "macOS가 일부 프로세스 이벤트를 전달하지 않았습니다."
+          }
+        }
+      }
+    },
     "macOS did not report a responsible process." : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "macOS가 책임 프로세스를 보고하지 않았습니다."
+          }
+        }
+      }
+    },
+    "macOS did not report the system extension state within %lld seconds." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "macOS가 %lld초 안에 시스템 확장 상태를 보고하지 않았습니다."
           }
         }
       }
@@ -5585,16 +7171,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "macOS가 결과 없이 시스템 확장 프로그램 요청을 끝냈습니다."
-          }
-        }
-      }
-    },
-    "macOS event delivery had gaps. Transitions that were not observed cannot be reconstructed." : {
-      "localizations" : {
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "macOS 이벤트 전달에 공백이 있었습니다. 관찰되지 않은 변화는 복원할 수 없습니다."
           }
         }
       }
@@ -5629,6 +7205,36 @@
         }
       }
     },
+    "macOS isn’t reporting the system extension state (for %@). In Terminal, run “sudo killall sysextd”, or restart this Mac." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "macOS가 시스템 확장 상태를 보고하지 않습니다(%@ 전부터). 터미널에서 “sudo killall sysextd”를 실행하거나 이 Mac을 재시동하세요."
+          }
+        }
+      }
+    },
+    "macOS isn’t reporting the system extension state." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "macOS가 시스템 확장 상태를 보고하지 않습니다."
+          }
+        }
+      }
+    },
+    "macOS isn’t reporting the system extension state. Try again in a minute." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "macOS가 시스템 확장 상태를 보고하지 않습니다. 1분 뒤에 다시 시도하세요."
+          }
+        }
+      }
+    },
     "macOS needs a restart to finish activating the new extension." : {
       "localizations" : {
         "ko" : {
@@ -5645,6 +7251,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "로그인 시 Pasu FS를 열려면 macOS에서 승인해야 합니다."
+          }
+        }
+      }
+    },
+    "macOS removes the extension when the Mac restarts. Until then, the extension keeps checking requests." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac을 재시동하면 macOS가 확장 프로그램을 제거합니다. 그때까지 확장 프로그램이 요청을 계속 검사합니다."
           }
         }
       }
@@ -5689,12 +7305,32 @@
         }
       }
     },
+    "macOS starts %@ when this Mac restarts." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 Mac을 재시동하면 macOS가 %@ 버전을 시작합니다."
+          }
+        }
+      }
+    },
     "macOS still reports a login registration. No application files were removed." : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "macOS가 아직 로그인 등록을 보고하고 있습니다. 앱 파일은 삭제하지 않았습니다."
+          }
+        }
+      }
+    },
+    "·" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "·"
           }
         }
       }
@@ -5709,12 +7345,52 @@
         }
       }
     },
+    "“%@” can turn on up to %lld compatibility profiles." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "‘%@’ 정책에서는 호환성 프로필을 최대 %lld개까지 켤 수 있습니다."
+          }
+        }
+      }
+    },
+    "“%@” has an invalid compatibility profile entry." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "‘%@’ 정책에 잘못된 호환성 프로필 항목이 있습니다."
+          }
+        }
+      }
+    },
     "“%@” has two rules with the same internal ID." : {
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "‘%@’ 정책에 내부 ID가 같은 규칙이 두 개 있습니다."
+          }
+        }
+      }
+    },
+    "“%@” protects a retired path until the policy is saved." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "‘%@’ 정책은 저장할 때까지 종전 경로를 보호합니다."
+          }
+        }
+      }
+    },
+    "“%@” protects retired paths until the policy is saved." : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "‘%@’ 정책은 저장할 때까지 종전 경로를 보호합니다."
           }
         }
       }

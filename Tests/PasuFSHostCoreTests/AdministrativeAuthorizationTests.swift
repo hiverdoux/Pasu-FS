@@ -1,4 +1,5 @@
 import Foundation
+import PasuFSIPC
 import XCTest
 
 @testable import PasuFSHostCore
@@ -17,7 +18,11 @@ final class AdministrativeAuthorizationTests: XCTestCase {
       AdministrativeAuthorizationOperation.uninstall.rightName,
       "com.example.pasu.fs.uninstall"
     )
-    XCTAssertEqual(AdministrativeAuthorizationOperation.allCases.count, 3)
+    XCTAssertEqual(
+      AdministrativeAuthorizationOperation.policyWeaken.rightName,
+      "com.example.pasu.fs.policy.weaken"
+    )
+    XCTAssertEqual(AdministrativeAuthorizationOperation.allCases.count, 4)
     XCTAssertTrue(
       AdministrativeAuthorizationOperation.extensionActivate.prompt.contains("activate")
     )
@@ -25,6 +30,8 @@ final class AdministrativeAuthorizationTests: XCTestCase {
       AdministrativeAuthorizationOperation.extensionDeactivate.prompt.contains("deactivate")
     )
     XCTAssertTrue(AdministrativeAuthorizationOperation.uninstall.prompt.contains("uninstall"))
+    XCTAssertTrue(
+      AdministrativeAuthorizationOperation.policyWeaken.prompt.contains("reduce the protection"))
     XCTAssertEqual(
       AdministrativeAuthorizationRule.authenticationRuleName,
       "authenticate-admin"
@@ -48,6 +55,30 @@ final class AdministrativeAuthorizationTests: XCTestCase {
       let unit = korean?["stringUnit"] as? [String: Any]
       XCTAssertEqual(unit?["state"] as? String, "translated", operation.prompt)
       XCTAssertFalse((unit?["value"] as? String ?? "").isEmpty, operation.prompt)
+    }
+  }
+
+  func testFabricatedExternalAuthorizationsAreRejectedBeforeAnyPrompt() {
+    XCTAssertEqual(ExternalAuthorizationVerifier.externalFormSize, 32)
+    XCTAssertThrowsError(
+      try ExternalAuthorizationVerifier.verify(Data(), grants: .policyWeaken)
+    ) { error in
+      XCTAssertEqual(error as? ExternalAuthorizationError, .malformed)
+    }
+    XCTAssertThrowsError(
+      try ExternalAuthorizationVerifier.verify(
+        Data(repeating: 0, count: 4096), grants: .policyWeaken)
+    ) { error in
+      XCTAssertEqual(error as? ExternalAuthorizationError, .malformed)
+    }
+    // A fabricated session cannot be imported, so no password dialog is reached.
+    XCTAssertThrowsError(
+      try ExternalAuthorizationVerifier.verify(Data(repeating: 0, count: 32), grants: .policyWeaken)
+    ) { error in
+      switch error as? ExternalAuthorizationError {
+      case .invalid, .ruleUnexpected: break
+      default: XCTFail("\(error)")
+      }
     }
   }
 

@@ -2,44 +2,20 @@ import Foundation
 import PasuFSHostCore
 import PasuFSIPC
 import PasuFSMaintenanceCore
-import Security
 
 enum UninstallAuthorization {
   static func validate(_ data: Data) throws {
-    guard data.count == MemoryLayout<AuthorizationExternalForm>.size else {
+    do {
+      try ExternalAuthorizationVerifier.verify(data, grants: .uninstall)
+    } catch ExternalAuthorizationError.malformed {
       throw MaintenanceError(.authorizationMalformed)
-    }
-    var external = AuthorizationExternalForm()
-    _ = withUnsafeMutableBytes(of: &external) { data.copyBytes(to: $0) }
-    var reference: AuthorizationRef?
-    let importStatus = AuthorizationCreateFromExternalForm(&external, &reference)
-    guard importStatus == errAuthorizationSuccess,
-      let reference
-    else { throw MaintenanceError(.authorizationInvalid, detail: String(importStatus)) }
-    defer { AuthorizationFree(reference, []) }
-    var definition: CFDictionary?
-    let lookup = AdministrativeAuthorizationOperation.uninstall.rightName.withCString {
-      AuthorizationRightGet($0, &definition)
-    }
-    guard lookup == errAuthorizationSuccess, let definition,
-      AdministrativeAuthorizationRule.isSecure(definition)
-    else {
+    } catch ExternalAuthorizationError.invalid(let status) {
+      throw MaintenanceError(.authorizationInvalid, detail: String(status))
+    } catch ExternalAuthorizationError.ruleUnexpected {
       throw MaintenanceError(.authorizationRuleUnexpected)
-    }
-    let status = AdministrativeAuthorizationOperation.uninstall.rightName.withCString { name in
-      var item = AuthorizationItem(name: name, valueLength: 0, value: nil, flags: 0)
-      return withUnsafeMutablePointer(to: &item) { itemPointer in
-        var rights = AuthorizationRights(count: 1, items: itemPointer)
-        // Authenticate and check exactly once in the GUI-created authorization session.
-        // timeout=0 remains in force: a previous GUI-side authentication would already be expired.
-        return AuthorizationCopyRights(
-          reference, &rights, nil, [.extendRights, .interactionAllowed], nil)
-      }
-    }
-    if status == errAuthorizationCanceled {
+    } catch ExternalAuthorizationError.canceled {
       throw MaintenanceError(.authorizationCanceled)
-    }
-    guard status == errAuthorizationSuccess else {
+    } catch ExternalAuthorizationError.denied(let status) {
       throw MaintenanceError(.authorizationDenied, detail: String(status))
     }
   }

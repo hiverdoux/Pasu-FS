@@ -137,7 +137,7 @@ public struct LineageIssue: Codable, Equatable, Sendable, Identifiable {
     case "parentUnavailable":
       "The parent execution identity was not available; the chain cannot be continued here."
     case "kernelEventLoss":
-      "macOS event delivery contained gaps. Unobserved transitions cannot be reconstructed."
+      "macOS dropped messages of any kind; the count includes them all. Process changes among them cannot be reconstructed."
     case "sequenceRestarted": "The event sequence restarted within this collection."
     case "queueOverflow": "The process-history queue could not accept some observations."
     case "historyOmitted":
@@ -271,6 +271,15 @@ extension AuditEventRecord {
     byteCount += targetPath?.utf8.count ?? 0
     byteCount += detail?.utf8.count ?? 0
     byteCount += (policyEvaluations?.count ?? 0) * 1_024
+    for evaluation in policyEvaluations ?? [] {
+      guard let origin = evaluation.executionOrigin else { continue }
+      for program in [origin.origin, origin.actor, origin.deniedProgram].compactMap({ $0 }) {
+        byteCount +=
+          512 + program.executablePath.utf8.count
+          + (program.teamIdentifier?.utf8.count ?? 0)
+          + (program.signingIdentifier?.utf8.count ?? 0)
+      }
+    }
     byteCount += processLineage?.estimatedByteCount ?? 0
     return byteCount
   }

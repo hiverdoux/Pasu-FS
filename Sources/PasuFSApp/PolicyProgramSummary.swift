@@ -18,8 +18,23 @@ struct PolicyProgramSummary: Identifiable, Equatable {
   let deniedCount: Int
   let allowedCount: Int
   let latestDecision: PolicyEvaluationDecision?
+  /// The policy revision the latest decision was made under.
+  let latestDecisionRevision: UInt64?
+  /// The revision of the policies in use when the summary was made.
+  let currentRevision: UInt64?
   let lastSeen: Date
   let targetSamples: [String]
+
+  /// Whether the latest decision was made under an earlier revision than the policies in use.
+  /// Every save creates a revision, including one that changes only another policy or follows a
+  /// moved folder, so the current rules may decide the program's next request differently, not
+  /// necessarily that they will.
+  var latestDecisionPrecedesCurrentRevision: Bool {
+    guard latestDecision != nil, let latestDecisionRevision, let currentRevision else {
+      return false
+    }
+    return latestDecisionRevision < currentRevision
+  }
 
   var ruleCandidate: AuditRuleCandidate? {
     switch identity {
@@ -51,6 +66,7 @@ enum PolicyProgramSummarizer {
   static func summaries(
     records: [AuditEventRecord],
     policyID: UUID,
+    currentRevision: UInt64? = nil,
     displayName: (String, String?) -> String
   ) -> [PolicyProgramSummary] {
     struct Accumulator {
@@ -61,6 +77,7 @@ enum PolicyProgramSummarizer {
       var deniedCount = 0
       var allowedCount = 0
       var latestDecision: PolicyEvaluationDecision?
+      var latestDecisionRevision: UInt64?
       var lastSeen: Date
       var targets: [String] = []
     }
@@ -68,28 +85,32 @@ enum PolicyProgramSummarizer {
     var grouped: [String: Accumulator] = [:]
     var order: [String] = []
     for record in records {
-      let evaluation =
-        record.policyEvaluations?.first { $0.policyIdentifier == policyID }
-        ?? record.policyEvaluations?.first
+      let evaluation = record.evaluation(for: policyID)
       let identity = identity(of: record)
       let key = identityKey(identity)
+      // One record can stand for several requests of one process.
+      let requests = Int(clamping: record.representedRequestCount)
+      let seen = record.lastRequestTimestamp
       var entry =
         grouped[key]
         ?? Accumulator(
           identity: identity, executablePath: record.executablePath,
-          processPreview: ProcessText.preview(record), lastSeen: record.timestamp)
+          processPreview: ProcessText.preview(record), lastSeen: seen)
       if grouped[key] == nil { order.append(key) }
-      entry.observationCount += 1
+      entry.observationCount += requests
       if let decision = evaluation?.decision {
         if decision.isDenial {
-          entry.deniedCount += 1
+          entry.deniedCount += requests
         } else {
-          entry.allowedCount += 1
+          entry.allowedCount += requests
         }
       }
-      if record.timestamp >= entry.lastSeen || entry.latestDecision == nil {
-        entry.lastSeen = max(entry.lastSeen, record.timestamp)
-        entry.latestDecision = evaluation?.decision ?? entry.latestDecision
+      if seen >= entry.lastSeen || entry.latestDecision == nil {
+        entry.lastSeen = max(entry.lastSeen, seen)
+        if let decision = evaluation?.decision {
+          entry.latestDecision = decision
+          entry.latestDecisionRevision = record.policyRevision
+        }
         entry.executablePath = record.executablePath ?? entry.executablePath
         entry.processPreview = ProcessText.preview(record)
       }
@@ -115,6 +136,7 @@ enum PolicyProgramSummarizer {
         executablePath: entry.executablePath, processPreview: entry.processPreview,
         observationCount: entry.observationCount, deniedCount: entry.deniedCount,
         allowedCount: entry.allowedCount, latestDecision: entry.latestDecision,
+        latestDecisionRevision: entry.latestDecisionRevision, currentRevision: currentRevision,
         lastSeen: entry.lastSeen, targetSamples: entry.targets)
     }
     .sorted { $0.lastSeen > $1.lastSeen }
@@ -146,25 +168,12 @@ enum PolicyProgramSummarizer {
     case .platformBinary: "platform:\(rule.signingIdentifier)"
     }
   }
+}
 
-  /// Programs whose opens would be denied if the policy enforced its current draft rules.
-  /// This is an estimate from the loaded records: it cannot see programs that have not opened
-  /// files yet, and it does not re-evaluate descendant inheritance or compatibility profiles.
-  static func projectedDenials(
-    summaries: [PolicyProgramSummary],
-    policyType: PolicyType,
-    rules: [PolicyRule]
-  ) -> [PolicyProgramSummary] {
-    let enabledKeys = Set(rules.filter(\.isEnabled).map(ruleKey))
-    return summaries.filter { summary in
-      let matchesRule = enabledKeys.contains(summary.id)
-      switch policyType {
-      case .whitelist:
-        return !matchesRule && summary.latestDecision?.isDenial == true
-      case .blacklist:
-        return matchesRule
-      }
-    }
+extension AuditEventRecord {
+  /// The recorded decision of one policy, or the first decision of a record that names none.
+  func evaluation(for policyID: UUID) -> PolicyEvaluationRecord? {
+    policyEvaluations?.first { $0.policyIdentifier == policyID } ?? policyEvaluations?.first
   }
 }
 

@@ -46,9 +46,9 @@ final class PolicyDocumentTests: XCTestCase {
     }
 
     policies[0].removeValue(forKey: "unexpected")
-    var rules = try XCTUnwrap(policies[0]["rules"] as? [[String: Any]])
+    var rules = try XCTUnwrap(policies[0]["allowRules"] as? [[String: Any]])
     rules[0]["unexpected"] = true
-    policies[0]["rules"] = rules
+    policies[0]["allowRules"] = rules
     top["policies"] = policies
     XCTAssertThrowsError(
       try PolicySetDocumentCodec.decode(JSONSerialization.data(withJSONObject: top))
@@ -58,6 +58,87 @@ final class PolicyDocumentTests: XCTestCase {
         .unknownRuleKeys(policy: 0, rule: 0, keys: ["unexpected"])
       )
     }
+  }
+
+  func testCompatibilityProfilesAreOptionalAndStrictlyDecoded() throws {
+    // A policy without profiles encodes exactly as before, so stored digests stay the same.
+    let plain = makeDocument()
+    let plainData = try PolicySetDocumentCodec.encode(plain, prettyPrinted: false)
+    XCTAssertFalse(String(decoding: plainData, as: UTF8.self).contains("systemCompatibility"))
+    var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: plainData) as? [String: Any])
+    XCTAssertEqual(try PolicySetDocumentCodec.decode(plainData), plain)
+
+    var withProfiles = plain
+    let entry = PolicySystemCompatibilityProfile(
+      profileIdentifier: "container-management",
+      authorizationDigest: String(repeating: "a", count: 64))
+    withProfiles.policies[0].systemCompatibilityProfiles = [entry]
+    let data = try PolicySetDocumentCodec.encode(withProfiles)
+    XCTAssertEqual(try PolicySetDocumentCodec.decode(data), withProfiles)
+    XCTAssertNotEqual(
+      try PolicySetDocumentCodec.digest(of: withProfiles),
+      try PolicySetDocumentCodec.digest(of: plain))
+
+    var policies = try XCTUnwrap(legacy["policies"] as? [[String: Any]])
+    policies[0]["systemCompatibilityProfiles"] = [
+      [
+        "profileIdentifier": "container-management",
+        "authorizationDigest": entry.authorizationDigest,
+        "unexpected": true,
+      ]
+    ]
+    legacy["policies"] = policies
+    XCTAssertThrowsError(
+      try PolicySetDocumentCodec.decode(JSONSerialization.data(withJSONObject: legacy))
+    ) {
+      XCTAssertEqual(
+        $0 as? PolicySetDocumentCodecError,
+        .unknownCompatibilityProfileKeys(policy: 0, profile: 0, keys: ["unexpected"]))
+    }
+    policies[0]["systemCompatibilityProfiles"] = "container-management"
+    legacy["policies"] = policies
+    XCTAssertThrowsError(
+      try PolicySetDocumentCodec.decode(JSONSerialization.data(withJSONObject: legacy))
+    ) {
+      XCTAssertEqual($0 as? PolicySetDocumentCodecError, .compatibilityProfilesArrayRequired(0))
+    }
+  }
+
+  func testCompatibilityProfileValidation() throws {
+    let valid = PolicySystemCompatibilityProfile(
+      profileIdentifier: "container-management",
+      authorizationDigest: String(repeating: "a", count: 64))
+    var document = makeDocument()
+    document.policies[0].systemCompatibilityProfiles = [valid, valid]
+    XCTAssertThrowsError(try document.validate()) {
+      XCTAssertEqual(
+        $0 as? PolicyValidationError,
+        .duplicateCompatibilityProfile(
+          policy: document.policies[0].name, profile: "container-management"))
+    }
+    var badDigest = valid
+    badDigest.authorizationDigest = String(repeating: "A", count: 64)
+    document.policies[0].systemCompatibilityProfiles = [badDigest]
+    XCTAssertThrowsError(try document.validate())
+    var padded = valid
+    padded.profileIdentifier = " container-management"
+    document.policies[0].systemCompatibilityProfiles = [padded]
+    XCTAssertThrowsError(try document.validate())
+    document.policies[0].systemCompatibilityProfiles = (0...16).map {
+      PolicySystemCompatibilityProfile(
+        profileIdentifier: "profile.\($0)", authorizationDigest: valid.authorizationDigest)
+    }
+    XCTAssertThrowsError(try document.validate()) {
+      XCTAssertEqual(
+        $0 as? PolicyValidationError,
+        .tooManyCompatibilityProfiles(policy: document.policies[0].name, count: 17))
+    }
+    // A profile the catalog doesn't have is kept; it is simply inactive.
+    document.policies[0].systemCompatibilityProfiles = [
+      PolicySystemCompatibilityProfile(
+        profileIdentifier: "com.example.unknown", authorizationDigest: valid.authorizationDigest)
+    ]
+    XCTAssertNoThrow(try document.validate())
   }
 
   func testValidationRejectsDuplicateRuleIDAndIdentityIncludingDisabledRules() throws {

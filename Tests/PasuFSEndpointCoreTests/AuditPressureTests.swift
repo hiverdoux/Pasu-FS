@@ -12,6 +12,7 @@ final class AuditPressureTests: XCTestCase {
       .general: .init(entries: 1, bytes: 32_768),
       .lifecycle: .init(entries: 1, bytes: 8_192),
       .audit: .init(entries: 1, bytes: 8_192),
+      .denied: .init(entries: 1, bytes: 8_192),
     ])
   }
 
@@ -22,11 +23,11 @@ final class AuditPressureTests: XCTestCase {
       machTime: sequence)
   }
 
-  private func record(_ sequence: UInt64) -> EndpointEventRecord {
+  private func record(_ sequence: UInt64, response: String = "deny") -> EndpointEventRecord {
     EndpointEventRecord(
       eventSequence: sequence, eventType: "AUTH_OPEN", processID: 7,
       executablePath: "/example/tool", targetPath: "/example/protected/file",
-      policyDecision: "deny", kernelResponse: "deny")
+      policyDecision: response, kernelResponse: response)
   }
 
   func testAtomicResizeKeepsSlotAndDedicatedLanesRemainSeparate() throws {
@@ -62,21 +63,24 @@ final class AuditPressureTests: XCTestCase {
       proceed.wait()
     }
     XCTAssertEqual(entered.wait(timeout: .now() + 3), .success)
-    tracker.submit(event(1), record: record(1))
-    tracker.submit(event(2), record: record(2))
-    tracker.submit(event(3), record: record(3))
+    tracker.submit(event(1), record: record(1, response: "allow"))
+    tracker.submit(event(2), record: record(2, response: "allow"))
+    tracker.submit(event(3), record: record(3, response: "allow"))
     tracker.submit(event(4, type: "NOTIFY_EXIT"), record: nil)
     XCTAssertEqual(budget.usage.entries, 3)
+    XCTAssertEqual(budget.usage(of: .denied), .init())
     proceed.signal()
     tracker.close()
     store.flushAndClose()
     let rows = try store.readAuditLog(maximumLineCount: 10).records
     XCTAssertEqual(rows.map(\.eventSequence), [1, 2])
-    XCTAssertEqual(rows.map(\.kernelResponse), ["deny", "deny"])
+    XCTAssertEqual(rows.map(\.kernelResponse), ["allow", "allow"])
     XCTAssertEqual(rows.last?.timestamp, Date(timeIntervalSince1970: 2))
     XCTAssertEqual(rows.last?.processLineage?.issues.first?.reason, "historyOmitted")
     XCTAssertEqual(store.deliveryMetrics.minimalRecordsStored, 1)
     XCTAssertEqual(store.deliveryMetrics.admissionDrops, 1)
+    XCTAssertEqual(store.deliveryMetrics.sharedLaneDrops, 1)
+    XCTAssertEqual(store.deliveryMetrics.deniedLaneDrops, 0)
     XCTAssertEqual(store.droppedEventCount, 1)
     XCTAssertEqual(budget.usage, .init())
     XCTAssertFalse(tracker.status.issues.contains { $0.reason == "kernelEventLoss" })
@@ -85,7 +89,8 @@ final class AuditPressureTests: XCTestCase {
   func testSnapshotGrowthFallsBackWithoutLeakingReservation() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
-    let budget = AuditWorkBudget(maximumEntries: 8, maximumBytes: 5_000)
+    let budget = AuditWorkBudget(
+      maximumEntries: 8, maximumBytes: 5_000, deniedEntries: 8, deniedBytes: 5_000)
     let store = try PolicyAuditLogStore(directoryURL: directory, budget: budget)
     let tracker = ProcessLineageTracker(bootIdentifier: "example", sink: store, budget: budget)
     var parent: LineageProcessKey?

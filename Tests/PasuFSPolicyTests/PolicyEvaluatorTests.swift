@@ -338,6 +338,92 @@ final class PolicyEvaluatorTests: XCTestCase {
     XCTAssertEqual(evaluator.decision(for: facts(token: child)), .denied)
   }
 
+  func testDirectlyMatchingParentWithUnobservedExecStillPassesAccessDown() throws {
+    let root = try token(60)
+    let childBeforeExec = ProcessInstanceKey(processID: 61, processVersion: 1)
+    let childAsSandbox = ProcessInstanceKey(processID: 61, processVersion: 2)
+    let childAsShell = ProcessInstanceKey(processID: 61, processVersion: 3)
+    var evaluator = PolicyEvaluator(policy: PolicySnapshot(rules: [rootRule]))
+    let rootFacts = facts(
+      token: root,
+      team: "TEAM123456",
+      signing: "com.example.Editor"
+    )
+    let childFacts = facts(
+      token: try token(61),
+      processInstance: childBeforeExec,
+      team: "TEAM123456",
+      signing: "com.example.Editor"
+    )
+    let sandboxFacts = facts(
+      token: try token(62),
+      processInstance: childAsSandbox,
+      signing: "com.apple.sandbox-exec",
+      isPlatformBinary: true
+    )
+    let shellFacts = facts(
+      token: try token(63),
+      processInstance: childAsShell,
+      signing: "com.apple.zsh",
+      isPlatformBinary: true
+    )
+
+    // The root's exec happened before observation began, so only its fork is seen.
+    evaluator.observeFork(parent: rootFacts, child: childBeforeExec)
+    evaluator.observeExec(from: childFacts, to: sandboxFacts)
+    evaluator.observeExec(from: sandboxFacts, to: shellFacts)
+
+    XCTAssertEqual(evaluator.decision(for: rootFacts), .allowedDirect(ruleID: rootRule.id))
+    XCTAssertEqual(
+      evaluator.decision(for: shellFacts),
+      .allowedInherited(ruleID: rootRule.id)
+    )
+  }
+
+  func testDirectlyMatchingSourceOfUnobservedExecPassesAccessToNewImage() throws {
+    let before = ProcessInstanceKey(processID: 70, processVersion: 1)
+    let after = ProcessInstanceKey(processID: 70, processVersion: 2)
+    var evaluator = PolicyEvaluator(policy: PolicySnapshot(rules: [rootRule]))
+    let shellFacts = facts(
+      token: try token(71),
+      processInstance: after,
+      signing: "com.apple.zsh",
+      isPlatformBinary: true
+    )
+
+    evaluator.observeExec(
+      from: facts(
+        token: try token(70),
+        processInstance: before,
+        team: "TEAM123456",
+        signing: "com.example.Editor"
+      ),
+      to: shellFacts
+    )
+
+    XCTAssertEqual(
+      evaluator.decision(for: shellFacts),
+      .allowedInherited(ruleID: rootRule.id)
+    )
+  }
+
+  func testDirectlyMatchingParentWithoutDescendantPermissionPassesNothing() throws {
+    let finder = try token(80)
+    let child = try token(81)
+    var evaluator = PolicyEvaluator(policy: PolicySnapshot(rules: [finderRule]))
+
+    evaluator.observeFork(
+      parent: facts(
+        token: finder,
+        signing: "com.apple.finder",
+        isPlatformBinary: true
+      ),
+      child: instance(child)
+    )
+
+    XCTAssertEqual(evaluator.decision(for: facts(token: child)), .denied)
+  }
+
   private func token(_ seed: UInt32) throws -> AuditTokenKey {
     try AuditTokenKey(words: (0..<8).map { seed + UInt32($0) })
   }

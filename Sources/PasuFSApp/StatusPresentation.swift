@@ -74,9 +74,15 @@ struct StatusPresentation: Equatable {
       tone = .neutral
     case .uninstalling:
       title = String(localized: "Uninstalling")
-      detail = String(
-        localized:
-          "macOS is removing the extension. Protection may continue until the Mac restarts.")
+      detail =
+        health.changeAtRestart == .removal
+        ? String(
+          localized:
+            "macOS removes the extension when the Mac restarts. Until then, the extension keeps checking requests."
+        )
+        : String(
+          localized:
+            "macOS is removing the extension. Protection may continue until the Mac restarts.")
       symbolName = "shield"
       menuBarSymbolName = "lock.shield"
       tone = .neutral

@@ -119,6 +119,7 @@ final class CoordinatorPolicyTests: XCTestCase {
     let target = fixture.child.appendingPathComponent("sample.txt").path
     let editor = try processFacts(team: "TEAM123456", signing: "com.example.Editor")
 
+    try observeLaunch(editor, in: coordinator)
     let allowed = coordinator.evaluateOpen(
       path: target,
       pathWasTruncated: false,
@@ -142,6 +143,7 @@ final class CoordinatorPolicyTests: XCTestCase {
       policies: [parent, denyingBlacklist, childAudit],
       revision: 8
     )
+    try observeLaunch(editor, in: coordinator)
     let denied = coordinator.evaluateOpen(
       path: target,
       pathWasTruncated: false,
@@ -210,261 +212,53 @@ final class CoordinatorPolicyTests: XCTestCase {
     XCTAssertEqual(protected.policyDecision, "denied")
   }
 
-  func testTypeChangeFlipsRetainedLineageAndRuleRemovalRevokesIt() throws {
+  func testDescendantGrantAllowsAndRevokesAnUnlistedActorWithRecordedEvidence() throws {
     let fixture = try makeScopeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.base) }
-    let scope = try ProtectedPathScope(
-      root: fixture.parent.path,
-      homeDirectory: fixture.home.path
-    )
-    let inheritableRule = AllowRule(
+    let scope = try ProtectedPathScope(root: fixture.parent.path, homeDirectory: fixture.home.path)
+    let rule = AllowRule(
       id: "rule.editor",
       program: SignedProgramIdentity(
-        teamIdentifier: "TEAM123456",
-        signingIdentifier: "com.example.Editor"
-      ),
-      allowsDescendants: true
-    )
-    let whitelist = configuration(
-      id: 1,
-      name: "Policy",
-      mode: .protection,
-      type: .whitelist,
-      scope: scope,
-      rules: [inheritableRule]
-    )
+        teamIdentifier: "TEAM123456", signingIdentifier: "com.example.Editor"),
+      allowsDescendants: true)
     let coordinator = EndpointEventCoordinator(
       policySetIdentifier: uuid(100),
-      policies: [whitelist],
-      policyRevision: 1,
-      sink: NoopSink(),
-      decodeFailurePolicy: .failClosed
-    )
-    let root = try processFacts(
-      seed: 1,
-      team: "TEAM123456",
-      signing: "com.example.Editor"
-    )
-    let child = try processFacts(seed: 2, team: "OTHERTEAM1", signing: "com.example.Shell")
-    coordinator.observeExec(root)
-    coordinator.observeFork(parent: root.processInstance, child: child.processInstance)
-    let target = fixture.parent.appendingPathComponent("sample.txt").path
-
-    let inheritedAllow = coordinator.evaluateOpen(
-      path: target,
-      pathWasTruncated: false,
-      process: child
-    )
-    XCTAssertEqual(inheritedAllow.authorizedFlags, UInt32.max)
-    XCTAssertEqual(inheritedAllow.policyEvaluations[0].match, .inherited)
-
-    let blacklist = configuration(
-      id: 1,
-      name: "Policy",
-      mode: .protection,
-      type: .blacklist,
-      scope: scope,
-      rules: [inheritableRule]
-    )
-    coordinator.replacePolicySet(
-      setIdentifier: uuid(100),
-      policies: [blacklist],
-      revision: 2
-    )
-    let inheritedDeny = coordinator.evaluateOpen(
-      path: target,
-      pathWasTruncated: false,
-      process: child
-    )
-    XCTAssertEqual(inheritedDeny.authorizedFlags, 0)
-    XCTAssertEqual(inheritedDeny.policyEvaluations[0].match, .inherited)
-
-    let disabled = configuration(
-      id: 1,
-      name: "Policy",
-      mode: .protection,
-      type: .blacklist,
-      scope: scope,
-      rules: []
-    )
-    coordinator.replacePolicySet(
-      setIdentifier: uuid(100),
-      policies: [disabled],
-      revision: 3
-    )
-    let revoked = coordinator.evaluateOpen(
-      path: target,
-      pathWasTruncated: false,
-      process: child
-    )
-    XCTAssertEqual(revoked.authorizedFlags, UInt32.max)
-    XCTAssertEqual(revoked.policyEvaluations[0].match, .none)
-  }
-
-  func testSystemCompatibilityProfileRelaxesOnlyWhitelistNoMatchForWholeFlagSet() throws {
-    let fixture = try makeScopeFixture()
-    defer { try? FileManager.default.removeItem(at: fixture.base) }
-    let scope = try ProtectedPathScope(
-      root: fixture.parent.path,
-      homeDirectory: fixture.home.path
-    )
-    let actor = SystemCompatibilityProfileActor(
-      signingIdentifier: "com.apple.example.worker",
-      allowedOpenFlags: UInt32(FREAD),
-      supportedOSRange: SystemCompatibilityOSRange(
-        minimum: SystemCompatibilityOSVersion(major: 14),
-        maximumExclusive: SystemCompatibilityOSVersion(major: 15)
-      ),
-      supportedOSBuilds: ["23A000"]
-    )
-    let profile = ResolvedSystemCompatibilityProfile(
-      profileIdentifier: "system.example.read",
-      authorizationDigest: String(repeating: "a", count: 64),
-      actors: [actor]
-    )
-    let whitelist = configuration(
-      id: 1,
-      name: "Whitelist",
-      mode: .protection,
-      type: .whitelist,
-      scope: scope,
-      rules: [],
-      systemCompatibilityProfiles: [profile]
-    )
-    let coordinator = EndpointEventCoordinator(
-      policySetIdentifier: uuid(100),
-      policies: [whitelist],
-      policyRevision: 1,
-      sink: NoopSink(),
-      decodeFailurePolicy: .failClosed
-    )
-    let process = try processFacts(
-      team: "",
-      signing: actor.signingIdentifier,
-      isPlatformBinary: true
-    )
-    let target = fixture.parent.appendingPathComponent("sample.txt").path
-
-    let read = coordinator.evaluateOpen(
-      path: target,
-      pathWasTruncated: false,
-      process: process,
-      requestedOpenFlags: UInt32(FREAD)
-    )
-    XCTAssertEqual(read.authorizedFlags, UInt32.max)
-    XCTAssertEqual(read.policyEvaluations[0].match, .systemCompatibilityProfile)
+      policies: [
+        configuration(
+          id: 1, name: "Policy", mode: .protection, type: .whitelist, scope: scope, rules: [rule])
+      ],
+      policyRevision: 1, sink: NoopSink(), decodeFailurePolicy: .failClosed)
+    let root = try processFacts(seed: 10, team: "TEAM123456", signing: "com.example.Editor")
+    let child = try processFacts(seed: 20, team: "OTHERTEAM1", signing: "com.example.Shell")
+    try observeLaunch(root, in: coordinator)
+    coordinator.observeFork(
+      parent: ExecutionProgram(facts: root, executablePath: ""),
+      child: ExecutionProgram(facts: child, executablePath: ""))
+    let result = coordinator.evaluateOpen(
+      path: fixture.parent.appendingPathComponent("sample.txt").path,
+      pathWasTruncated: false, process: child)
+    XCTAssertEqual(result.authorizedFlags, UInt32.max)
+    XCTAssertEqual(result.policyEvaluations[0].executionOrigin?.reason, .allowedInherited)
+    XCTAssertEqual(result.policyEvaluations[0].match, .inherited)
+    XCTAssertEqual(result.policyEvaluations[0].ruleIdentifier, rule.id)
     XCTAssertEqual(
-      read.policyEvaluations[0].systemCompatibilityProfileIdentifier,
-      profile.profileIdentifier
-    )
-
-    let readWrite = coordinator.evaluateOpen(
-      path: target,
-      pathWasTruncated: false,
-      process: process,
-      requestedOpenFlags: UInt32(FREAD | FWRITE)
-    )
-    XCTAssertEqual(readWrite.authorizedFlags, 0)
-    XCTAssertEqual(readWrite.policyEvaluations[0].match, .none)
-  }
-
-  func testProfilesDoNotOverrideBlacklistOrCombinePartialCapabilities() throws {
-    let fixture = try makeScopeFixture()
-    defer { try? FileManager.default.removeItem(at: fixture.base) }
-    let scope = try ProtectedPathScope(
-      root: fixture.parent.path,
-      homeDirectory: fixture.home.path
-    )
-    let signingIdentifier = "com.apple.example.worker"
-    let readProfile = ResolvedSystemCompatibilityProfile(
-      profileIdentifier: "system.example.read",
-      authorizationDigest: String(repeating: "a", count: 64),
-      actors: [
-        SystemCompatibilityProfileActor(
-          signingIdentifier: signingIdentifier,
-          allowedOpenFlags: UInt32(FREAD),
-          supportedOSRange: SystemCompatibilityOSRange(
-            minimum: SystemCompatibilityOSVersion(major: 14),
-            maximumExclusive: SystemCompatibilityOSVersion(major: 15)
-          ),
-          supportedOSBuilds: ["23A000"]
-        )
-      ]
-    )
-    let writeProfile = ResolvedSystemCompatibilityProfile(
-      profileIdentifier: "system.example.write",
-      authorizationDigest: String(repeating: "b", count: 64),
-      actors: [
-        SystemCompatibilityProfileActor(
-          signingIdentifier: signingIdentifier,
-          allowedOpenFlags: UInt32(FWRITE),
-          supportedOSRange: SystemCompatibilityOSRange(
-            minimum: SystemCompatibilityOSVersion(major: 14),
-            maximumExclusive: SystemCompatibilityOSVersion(major: 15)
-          ),
-          supportedOSBuilds: ["23A000"]
-        )
-      ]
-    )
-    let blacklistRule = AllowRule(
-      id: "rule.blocked",
-      identity: .platformBinary(signingIdentifier: signingIdentifier),
-      allowsDescendants: false
-    )
-    let blacklist = configuration(
-      id: 1,
-      name: "Blacklist",
-      mode: .protection,
-      type: .blacklist,
-      scope: scope,
-      rules: [blacklistRule],
-      systemCompatibilityProfiles: [readProfile, writeProfile]
-    )
-    let coordinator = EndpointEventCoordinator(
-      policySetIdentifier: uuid(100),
-      policies: [blacklist],
-      policyRevision: 1,
-      sink: NoopSink(),
-      decodeFailurePolicy: .failClosed
-    )
-    let process = try processFacts(
-      team: "",
-      signing: signingIdentifier,
-      isPlatformBinary: true
-    )
-    let target = fixture.parent.appendingPathComponent("sample.txt").path
-
-    let blacklisted = coordinator.evaluateOpen(
-      path: target,
-      pathWasTruncated: false,
-      process: process,
-      requestedOpenFlags: UInt32(FREAD)
-    )
-    XCTAssertEqual(blacklisted.authorizedFlags, 0)
-    XCTAssertEqual(blacklisted.policyEvaluations[0].match, .direct)
-
-    let whitelist = configuration(
-      id: 1,
-      name: "Whitelist",
-      mode: .protection,
-      type: .whitelist,
-      scope: scope,
-      rules: [],
-      systemCompatibilityProfiles: [readProfile, writeProfile]
-    )
+      result.policyEvaluations[0].executionOrigin?.inheritedFrom?.instance,
+      root.processInstance)
+    XCTAssertEqual(
+      result.policyEvaluations[0].executionOrigin?.origin?.instance, root.processInstance)
+    let strict = AllowRule(id: rule.id, identity: rule.identity, allowsDescendants: false)
     coordinator.replacePolicySet(
       setIdentifier: uuid(100),
-      policies: [whitelist],
-      revision: 2
-    )
-    let combined = coordinator.evaluateOpen(
-      path: target,
-      pathWasTruncated: false,
-      process: process,
-      requestedOpenFlags: UInt32(FREAD | FWRITE)
-    )
-    XCTAssertEqual(combined.authorizedFlags, 0)
-    XCTAssertEqual(combined.policyEvaluations[0].match, .none)
+      policies: [
+        configuration(
+          id: 1, name: "Policy", mode: .protection, type: .whitelist, scope: scope, rules: [strict])
+      ],
+      revision: 2)
+    let revoked = coordinator.evaluateOpen(
+      path: fixture.parent.appendingPathComponent("sample.txt").path,
+      pathWasTruncated: false, process: child)
+    XCTAssertEqual(revoked.authorizedFlags, 0)
+    XCTAssertEqual(revoked.policyEvaluations[0].executionOrigin?.reason, .actorNotAllowed)
   }
 
   func testDecodeFailureDecisionMatrix() throws {
@@ -532,14 +326,26 @@ final class CoordinatorPolicyTests: XCTestCase {
     )
   }
 
+  private func observeLaunch(_ actor: ProcessFacts, in coordinator: EndpointEventCoordinator) throws
+  {
+    let launchd = ExecutionProgram(
+      facts: try processFacts(
+        seed: 1, team: "", signing: "com.apple.xpc.launchd", isPlatformBinary: true),
+      executablePath: "/sbin/launchd")
+    var child = launchd
+    child.instance = ProcessInstanceKey(
+      processID: actor.processInstance.processID, processVersion: 0)
+    coordinator.observeFork(parent: launchd, child: child)
+    coordinator.observeExec(from: child, to: ExecutionProgram(facts: actor, executablePath: ""))
+  }
+
   private func configuration(
     id: Int,
     name: String,
     mode: PolicyMode,
     type: PolicyType,
     scope: ProtectedPathScope,
-    rules: [AllowRule],
-    systemCompatibilityProfiles: [ResolvedSystemCompatibilityProfile] = []
+    rules: [AllowRule]
   ) -> EndpointPolicyConfiguration {
     EndpointPolicyConfiguration(
       id: uuid(id),
@@ -547,13 +353,12 @@ final class CoordinatorPolicyTests: XCTestCase {
       mode: mode,
       policyType: type,
       scope: scope,
-      rules: PolicySnapshot(rules: rules),
-      systemCompatibilityProfiles: systemCompatibilityProfiles
+      rules: PolicySnapshot(rules: rules)
     )
   }
 
   private func processFacts(
-    seed: Int32 = 1,
+    seed: Int32 = 10,
     team: String,
     signing: String,
     isPlatformBinary: Bool = false
@@ -563,15 +368,16 @@ final class CoordinatorPolicyTests: XCTestCase {
       processInstance: ProcessInstanceKey(processID: seed, processVersion: 1),
       teamIdentifier: team,
       signingIdentifier: signing,
-      isPlatformBinary: isPlatformBinary
+      isPlatformBinary: isPlatformBinary, codeSigningFlags: 1
     )
   }
 
   private func makeScopeFixture() throws -> (
     base: URL, home: URL, parent: URL, child: URL
   ) {
-    let base = FileManager.default.temporaryDirectory
-      .appendingPathComponent("PasuFSMultiPolicyTests-\(UUID().uuidString)")
+    let base = PhysicalPath.resolve(
+      FileManager.default.temporaryDirectory
+        .appendingPathComponent("PasuFSMultiPolicyTests-\(UUID().uuidString)"))
     let home = base.appendingPathComponent("home")
     let parent = home.appendingPathComponent("Protected")
     let child = parent.appendingPathComponent("Nested")

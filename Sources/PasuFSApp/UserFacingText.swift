@@ -3,6 +3,7 @@ import PasuFSConfiguration
 import PasuFSHostCore
 import PasuFSIPC
 import PasuFSMaintenanceCore
+import PasuFSPolicy
 
 // User-facing wording lives here so every screen names the same concept the same way.
 // Messages produced by the system extension or shared libraries stay in English there,
@@ -21,15 +22,6 @@ extension PolicyMode {
     switch self {
     case .protection: "checkmark.shield"
     case .audit: "eye"
-    }
-  }
-}
-
-extension PolicyType {
-  var displayName: String {
-    switch self {
-    case .whitelist: String(localized: "Whitelist")
-    case .blacklist: String(localized: "Blacklist")
     }
   }
 }
@@ -60,11 +52,14 @@ extension PolicyRuleMatchKind {
   var displayName: String {
     switch self {
     case .direct: String(localized: "Matched a rule")
-    case .inherited: String(localized: "Inherited from an observed parent process")
+    case .inherited: String(localized: "Inherited from an observed ancestor process")
     case .systemCompatibilityProfile: String(localized: "System compatibility profile")
     case .none: String(localized: "No matching rule")
     case .decodeError: String(localized: "Process details could not be read")
     case .truncatedPath: String(localized: "The path was truncated")
+    case .mountPoint: String(localized: "The mount point covers this policy’s folder")
+    case .enclosingFolder:
+      String(localized: "The request acts on a folder that contains this policy’s folder")
     }
   }
 }
@@ -73,71 +68,320 @@ extension SystemCompatibilityProfileState {
   var displayName: String {
     switch self {
     case .active: String(localized: "On")
-    case .disabled: String(localized: "Off")
     case .needsReview: String(localized: "Review needed")
     case .missingProfile: String(localized: "Unavailable")
     case .unsupportedOS: String(localized: "Not supported on this macOS")
-    case .policyContextChanged: String(localized: "Policy changed")
-    case .policyMissing: String(localized: "Policy unavailable")
     }
   }
 
-  var needsReview: Bool {
-    self == .needsReview || self == .policyContextChanged
+  /// Why a profile that is turned on does nothing, or nil while it is active.
+  var inactiveReason: String? {
+    switch self {
+    case .active: nil
+    case .needsReview:
+      String(localized: "Inactive because the profile changed. Turn it off and on again.")
+    case .missingProfile: String(localized: "Inactive because this version doesn’t offer it.")
+    case .unsupportedOS: String(localized: "Inactive on this version of macOS.")
+    }
+  }
+}
+
+/// Names and descriptions of the built-in compatibility profiles in the app's language.
+enum SystemCompatibilityText {
+  static func name(identifier: String) -> String {
+    switch identifier {
+    case BuiltInSystemCompatibilityCatalog.containerManagementIdentifier:
+      String(localized: "App Container Management")
+    case BuiltInSystemCompatibilityCatalog.xprotectRemediationIdentifier:
+      String(localized: "XProtect Malware Scanning")
+    case BuiltInSystemCompatibilityCatalog.finderCopyIdentifier:
+      String(localized: "Finder Copy")
+    default:
+      identifier
+    }
+  }
+
+  static func role(_ profile: SystemCompatibilityProfile) -> String {
+    switch profile.id {
+    case BuiltInSystemCompatibilityCatalog.containerManagementIdentifier:
+      String(
+        localized:
+          "Lets the macOS services that prepare an app’s container, some running as your user account, read it so the app can start."
+      )
+    case BuiltInSystemCompatibilityCatalog.xprotectRemediationIdentifier:
+      String(
+        localized:
+          "Lets the macOS malware scanner XProtect read this folder: its remediator plug-ins, running as root or as your user account, while they scan it, and its analysis service, running as root, when Gatekeeper checks an item."
+      )
+    case BuiltInSystemCompatibilityCatalog.finderCopyIdentifier:
+      String(
+        localized:
+          "Lets the macOS service that carries out Finder’s copies, duplicates and restores from the Time Machine screen, running as root or as your user account, copy files and folders into and out of this folder."
+      )
+    default:
+      profile.roleDescription
+    }
+  }
+
+  static func consequence(_ profile: SystemCompatibilityProfile) -> String {
+    switch profile.id {
+    case BuiltInSystemCompatibilityCatalog.containerManagementIdentifier:
+      String(localized: "Apple’s container services can read this app container.")
+    case BuiltInSystemCompatibilityCatalog.xprotectRemediationIdentifier:
+      String(localized: "Apple’s malware scanner can read this folder.")
+    case BuiltInSystemCompatibilityCatalog.finderCopyIdentifier:
+      String(
+        localized:
+          "Finder can copy items into this folder, and copy its items or the whole folder out of it."
+      )
+    default:
+      profile.consequence
+    }
+  }
+}
+
+/// What macOS did with a request whose answer from Pasu FS failed to reach it. macOS decides such
+/// a request itself at its deadline, according to the deadline miss mode the extension reports.
+/// The mode is the current one, not the one in effect when the record was made.
+enum MissedDeadlineOutcome: Equatable {
+  case denied
+  case allowed
+  /// The status names no mode.
+  case unknown
+
+  init(_ mode: DeadlineMissModeStatus?) {
+    switch mode?.setting {
+    case .failClosed: self = .denied
+    case .killUnavailable, .killAfterFailure: self = .allowed
+    case nil: self = .unknown
+    }
   }
 }
 
 enum KernelResponseText {
-  static func label(_ response: String) -> String {
+  static let missedDeadline = "response-error"
+
+  /// The answer in the log list. For a request whose answer failed, the answer macOS gave itself.
+  static func label(_ response: String, deadlineMissMode: DeadlineMissModeStatus?) -> String {
     switch response {
     case "allow": String(localized: "Allow")
     case "deny": String(localized: "Deny")
     case "notify-only": String(localized: "Notify")
-    case "response-error": String(localized: "Error")
+    case missedDeadline:
+      switch MissedDeadlineOutcome(deadlineMissMode) {
+      case .denied: String(localized: "Deny")
+      case .allowed: String(localized: "Allow")
+      case .unknown: String(localized: "Missed deadline")
+      }
+    default: response
+    }
+  }
+
+  /// The title of a record's details.
+  static func headline(_ response: String, deadlineMissMode: DeadlineMissModeStatus?) -> String {
+    switch response {
+    case "deny": String(localized: "Denied")
+    case "allow": String(localized: "Allowed")
+    case "notify-only": String(localized: "Notified")
+    case missedDeadline:
+      switch MissedDeadlineOutcome(deadlineMissMode) {
+      case .denied: String(localized: "Denied (missed deadline)")
+      case .allowed: String(localized: "Allowed (missed deadline)")
+      case .unknown: String(localized: "Missed deadline")
+      }
     default: response
     }
   }
 }
 
+/// The reason shown with a recorded decision.
+enum DecisionReasonText {
+  /// The line under a decision in the log list: the profile that allowed the request, or the
+  /// recorded reason from the program lists. A profile allows a request the program lists alone
+  /// would not, so the lists' reason would contradict the decision.
+  static func summary(_ evaluation: PolicyEvaluationRecord) -> String? {
+    if evaluation.match == .systemCompatibilityProfile { return match(evaluation) }
+    return evaluation.executionOrigin.map { OriginText.reason($0.reason) }
+  }
+
+  /// The profile that allowed the request, or how the request matched the policy.
+  static func match(_ evaluation: PolicyEvaluationRecord) -> String {
+    if let profile = evaluation.systemCompatibilityProfileIdentifier {
+      let name = SystemCompatibilityText.name(identifier: profile)
+      return String(localized: "Allowed by the compatibility profile “\(name)”")
+    }
+    return evaluation.match.displayName
+  }
+}
+
 enum PolicyBehaviorText {
-  static func rulesTitle(_ type: PolicyType) -> String {
-    switch type {
-    case .whitelist: String(localized: "Programs to Allow")
-    case .blacklist: String(localized: "Programs to Block")
+  static func rulesTitle(_ list: PolicyRuleList) -> String {
+    switch list {
+    case .allow: String(localized: "Programs to Allow")
+    case .deny: String(localized: "Programs to Block")
     }
   }
 
-  static func addToListTitle(_ type: PolicyType) -> String {
-    switch type {
-    case .whitelist: String(localized: "Add to Whitelist")
-    case .blacklist: String(localized: "Add to Blacklist")
+  static func addToListTitle(_ list: PolicyRuleList) -> String {
+    switch list {
+    case .allow: String(localized: "Add to Programs to Allow")
+    case .deny: String(localized: "Add to Programs to Block")
     }
   }
 
-  static func inListTitle(_ type: PolicyType) -> String {
-    switch type {
-    case .whitelist: String(localized: "In Whitelist")
-    case .blacklist: String(localized: "In Blacklist")
+  static func inListTitle(_ list: PolicyRuleList) -> String {
+    switch list {
+    case .allow: String(localized: "In Programs to Allow")
+    case .deny: String(localized: "In Programs to Block")
+    }
+  }
+}
+
+/// Wording for the decision evidence the extension records with each checked open.
+enum OriginText {
+  static func reason(_ reason: ExecutionOriginDecisionReason) -> String {
+    switch reason {
+    case .allowed: String(localized: "First program and access process are allowed")
+    case .allowedInherited: String(localized: "Access allowed by a descendant rule")
+    case .blacklistAllowed: String(localized: "No blocked program in the execution history")
+    case .emptyAllowList: String(localized: "No program is allowed")
+    case .originNotAllowed: String(localized: "First program is not allowed")
+    case .actorNotAllowed: String(localized: "Access process is not allowed")
+    case .deniedInHistory: String(localized: "Blocked program in the execution history")
+    case .incompleteHistory: String(localized: "Execution history is incomplete")
+    case .noFirstProgram: String(localized: "First program is unknown")
     }
   }
 
-  static func descendantsWarning(_ type: PolicyType) -> String {
-    switch type {
-    case .whitelist:
+  /// Why the history a decision needs could not be established.
+  static func uncertainty(_ uncertainty: ExecutionOriginUncertainty) -> String {
+    switch uncertainty {
+    case .beforeObservation:
+      String(localized: "This execution began before the extension started tracking processes.")
+    case .eventLoss:
+      String(localized: "macOS did not deliver some process events.")
+    case .stateLimit:
+      String(localized: "The tracked execution history reached its limit and was reset.")
+    case .policyChanged:
       String(
         localized:
-          "Everything this program starts can open the files too, including commands run in a shell."
-      )
-    case .blacklist:
+          "A program was added to a block list, so the earlier execution history can’t be used.")
+    case .identityChanged:
+      String(localized: "The program changed without an observed execution change.")
+    case .decodeFailure:
+      String(localized: "A process event could not be read.")
+    case .unavailableEventVersion:
+      String(localized: "This macOS event version does not number its process events.")
+    }
+  }
+
+  static func intermediary(_ role: SystemIntermediaryRole) -> String {
+    String(localized: "System intermediary (\(role.rawValue))")
+  }
+
+  /// How a complete history began, when that differs from an observed launch.
+  static func evidence(_ evidence: ExecutionHistoryEvidence) -> String? {
+    switch evidence {
+    case .observed:
+      nil
+    case .kernelLaunchdStart:
       String(
         localized:
-          "Everything this program starts is blocked too, including helpers other apps share."
+          "This history begins with a process that launchd started before the extension started tracking processes."
       )
     }
   }
 }
 
+enum InstallationStateText {
+  /// The notice while macOS doesn't answer requests for the installation states, with what
+  /// restarts the system extension daemon that answers them.
+  static func unanswered(since: Date, now: Date) -> String {
+    let duration = Duration.seconds(max(0, now.timeIntervalSince(since))).formatted(
+      .units(allowed: [.hours, .minutes, .seconds], width: .wide, maximumUnitCount: 1))
+    return String(
+      localized:
+        "macOS isn’t reporting the system extension state (for \(duration)). In Terminal, run “sudo killall sysextd”, or restart this Mac."
+    )
+  }
+
+  /// Why a query produced no installation states. macOS's own error keeps its text.
+  static func failureDetail(_ failure: InstallationStateQueryFailure) -> String {
+    switch failure {
+    case .requestFailed(_, _, let description):
+      description
+    case .endedWithoutAnswer:
+      String(
+        localized: "macOS finished the extension query without returning version information.")
+    case .launchFailed(let description):
+      String(localized: "The installation state check could not start: \(description)")
+    case .exited(let status):
+      String(
+        localized:
+          "The installation state check ended with status \(Int(status)) without an answer.")
+    case .signaled(let signal):
+      String(localized: "The installation state check was ended by signal \(Int(signal)).")
+    case .invalidOutput:
+      String(localized: "The installation state check returned an unreadable result.")
+    }
+  }
+}
+
+enum PolicyStorageText {
+  static func displayName(_ state: PolicyStorageState) -> String {
+    switch state {
+    case .notConfigured: String(localized: "No saved policies")
+    case .ready: String(localized: "Normal")
+    case .migrated: String(localized: "Converted from an earlier format")
+    case .recovered: String(localized: "Restored from the verified copy")
+    case .denyAllRecovery: String(localized: "Damaged; denying every request")
+    case .unavailable: String(localized: "Unavailable")
+    }
+  }
+
+  /// What a state other than the normal ones means for protection.
+  static func summary(_ state: PolicyStorageState) -> String? {
+    switch state {
+    case .notConfigured, .ready:
+      nil
+    case .migrated:
+      String(
+        localized:
+          "The saved policies were converted from an earlier format. Programs started by an allowed program are no longer allowed automatically."
+      )
+    case .recovered:
+      String(localized: "The saved policies were restored from their verified copy.")
+    case .denyAllRecovery:
+      String(
+        localized:
+          "The saved policies are damaged. Protection policies deny every request in their folders until the policies are saved again."
+      )
+    case .unavailable:
+      String(
+        localized:
+          "The saved policies could not be recovered, so their folders are not protected.")
+    }
+  }
+}
+
 enum LineageText {
+  /// The reason of the issue that counts every message number macOS skipped, whatever the kind
+  /// of the message, not only process events.
+  static let droppedMessagesReason = "kernelEventLoss"
+
+  /// The issue with its count. The count of dropped messages is named as such; the other
+  /// issues show it after their explanation, and only above one unless `alwaysShowingCount`.
+  static func text(_ issue: LineageIssue, alwaysShowingCount: Bool) -> String {
+    if issue.reason == droppedMessagesReason {
+      return String(
+        localized:
+          "Dropped messages (all kinds): \(issue.count). Process changes among them can’t be reconstructed."
+      )
+    }
+    let explanation = explanation(issue)
+    return alwaysShowingCount || issue.count > 1 ? "\(explanation) (\(issue.count))" : explanation
+  }
+
   static func explanation(_ issue: LineageIssue) -> String {
     switch issue.reason {
     case "unobserved": String(localized: "Identity reported, but this execution was not observed.")
@@ -145,23 +389,18 @@ enum LineageText {
       String(
         localized:
           "The parent execution identity was not available, so the chain cannot continue here.")
-    case "kernelEventLoss":
-      String(
-        localized:
-          "macOS event delivery had gaps. Transitions that were not observed cannot be reconstructed."
-      )
     case "sequenceRestarted":
       String(localized: "The event sequence restarted within this collection.")
     case "queueOverflow":
-      String(localized: "The process history queue could not accept some observations.")
+      String(localized: "The process lineage queue could not accept some observations.")
     case "historyOmitted":
-      String(localized: "Process history was left out to keep the access record under load.")
+      String(localized: "Process lineage was left out to keep the access record under load.")
     case "historyBudgetExceeded":
-      String(localized: "Process history did not fit within the pending-work budget.")
+      String(localized: "Process lineage did not fit within the pending-work budget.")
     case "resourceLimit":
       String(
         localized:
-          "The process history data budget ran out, so some observations were not kept.")
+          "The process lineage data budget ran out, so some observations were not kept.")
     case "decodeError": String(localized: "Some process event fields could not be read.")
     case "cycle":
       String(
@@ -171,7 +410,7 @@ enum LineageText {
     case "oversizedRecord":
       String(
         localized:
-          "The complete process history exceeded the log file limit and could not be stored.")
+          "The complete process lineage exceeded the log file limit and could not be stored.")
     case "mutedLifecycle":
       String(localized: "macOS excludes some process lifecycle events from this client.")
     case "muteInspectionFailed":
@@ -191,7 +430,7 @@ enum LineageText {
     switch kind {
     case .fork: String(localized: "Child creation observed")
     case .exec: String(localized: "Program replaced in the same process")
-    case .parent: String(localized: "Parent reported by macOS")
+    case .parent: String(localized: "Parent process reported by macOS")
     case .responsible: String(localized: "Responsibility reported by macOS")
     }
   }
@@ -202,39 +441,20 @@ enum LineageText {
     }
     return String(
       localized:
-        "This older collector could count local queue losses again as macOS delivery gaps. These two counts may overlap."
+        "This older collector could count local queue losses again as dropped messages. These two counts may overlap."
     )
-  }
-}
-
-enum AuditBatchText {
-  /// Everything that makes the loaded records incomplete. These notes are never hidden. The
-  /// 500-record load limit isn't repeated here because the log header always states it.
-  static func limitations(of batch: AuditLogBatch) -> String? {
-    var parts: [String] = []
-    if let warning = batch.warning {
-      parts.append(RuntimeText.localized(warning))
-    }
-    if batch.droppedEventCount > 0 {
-      parts.append(
-        String(localized: "\(batch.droppedEventCount) records couldn’t be saved during this run."))
-    }
-    if batch.skippedLineCount > 0 {
-      parts.append(String(localized: "\(batch.skippedLineCount) unreadable lines were skipped."))
-    }
-    return parts.isEmpty ? nil : parts.joined(separator: " ")
   }
 }
 
 /// Translates recognized English messages from the host library and the system extension.
 enum RuntimeText {
   static func localized(_ message: String) -> String {
+    // The extension reports separate warnings on separate lines.
+    if message.contains("\n") {
+      return message.split(separator: "\n").map { localized(String($0)) }.joined(separator: "\n")
+    }
     if let exact = exactTranslation(message) {
       return exact
-    }
-    let storage = SystemCompatibilityWarningState.storageRejectionMessage
-    if message.hasPrefix(storage + " ") {
-      return localized(storage) + " " + localized(String(message.dropFirst(storage.count + 1)))
     }
     if let profileWarning = profileWarningTranslation(message) {
       return profileWarning
@@ -250,6 +470,8 @@ enum RuntimeText {
 
   private static func exactTranslation(_ message: String) -> String? {
     switch message {
+    case HealthStateReducer.installationStatesUnreportedReason:
+      String(localized: "macOS isn’t reporting the system extension state.")
     case "Authenticated runtime status is stale.":
       String(
         localized:
@@ -272,7 +494,7 @@ enum RuntimeText {
     case SetupProgress.awaitingFirstPolicyReason:
       String(localized: "No saved policy yet.")
     case "Process history event subscription failed.":
-      String(localized: "The extension could not subscribe to process history events.")
+      String(localized: "The extension could not subscribe to process lineage events.")
     case "Full Disk Access is required.":
       String(localized: "Full Disk Access is required.")
     case "Creating the Endpoint Security client.":
@@ -285,13 +507,22 @@ enum RuntimeText {
       String(
         localized:
           "The old single-policy file was permanently removed. Create the policies again.")
-    case SystemCompatibilityWarningState.storageRejectionMessage:
-      String(
-        localized:
-          "Saved system compatibility settings could not be read, validated or trusted. No compatibility profile is active."
-      )
     case "The audit log is unavailable.":
       String(localized: "Logs are unavailable.")
+    case "Policy storage migrated. Review and enable descendant access for each allowed program.":
+      String(
+        localized:
+          "Previous descendant settings are off. Enable them for each program you trust."
+      )
+    case "The latest committed policy was recovered from its verified copy.":
+      String(localized: "The primary copy was unreadable and has been repaired.")
+    case "Both current policy copies are unavailable. Known Protection scopes deny all access until a newer valid policy is saved.",
+      "Recovery protection denies access in known Protection scopes until a newer valid policy is saved.":
+      String(
+        localized:
+          "Both copies of the saved policies are unreadable. Their programs can’t be restored.")
+    case "The protected root must be an absolute path.":
+      ProtectedFolderIssue.notAbsolute.userFacingMessage
     default:
       nil
     }
@@ -313,13 +544,71 @@ enum RuntimeText {
           localized: "The old single-policy file could not be removed and was not applied: \($0)")
       }
     ),
+    // The form that extension versions before 0.9.0 sent.
     (
       "Stored policy set rejected: ",
       { String(localized: "The saved policies were rejected: \($0)") }
     ),
     (
+      "Stored policy set rejected; protected scopes could not be recovered: ",
+      { String(localized: "The saved policies were rejected: \($0)") }
+    ),
+    (
+      "The current policy copy is active, but repairing its primary failed: ",
+      { String(localized: "The primary copy could not be repaired: \($0)") }
+    ),
+    (
+      "The protected root does not exist: ",
+      { "\(ProtectedFolderIssue.missing.userFacingMessage) \($0)" }
+    ),
+    (
+      "The protected root is not a directory: ",
+      { "\(ProtectedFolderIssue.notDirectory.userFacingMessage) \($0)" }
+    ),
+    (
+      "Choose a folder below the home or system directory: ",
+      { "\(ProtectedFolderIssue.tooBroad($0).userFacingMessage) \($0)" }
+    ),
+    (
+      "Policy-set identifier ",
+      { _ in
+        String(
+          localized:
+            "The extension stores a different policy set. Pasu FS is loading the saved policies again."
+        )
+      }
+    ),
+    (
       "Status persistence failed: ",
       { String(localized: "The status file could not be saved: \($0)") }
+    ),
+    (
+      "Protected volume unmounted: ",
+      {
+        String(
+          localized:
+            "A volume at \($0) was unmounted. Check the protected folders there, then save the policies again to clear this notice."
+        )
+      }
+    ),
+    (
+      "Protected folder missing: ",
+      {
+        String(
+          localized:
+            "A protected folder can’t be found: \($0). Its last path stays protected.")
+      }
+    ),
+    (
+      "Protected folder moved but not followed: ",
+      {
+        String(
+          localized: "A protected folder moved, but its policy could not be updated: \($0)")
+      }
+    ),
+    (
+      "Protected folder check failed: ",
+      { String(localized: "The protected folders could not be checked: \($0)") }
     ),
     (
       "es_new_client failed: ",
@@ -329,15 +618,18 @@ enum RuntimeText {
 
   private static func profileWarningTranslation(_ message: String) -> String? {
     let prefix = "System-compatibility profile "
-    let separator = " is inactive: "
-    if message.hasPrefix(prefix), message.hasSuffix("."),
-      let range = message.range(of: separator)
-    {
+    for (separator, inactive) in [(" is inactive: ", true), (" cannot be turned on: ", false)] {
+      guard message.hasPrefix(prefix), message.hasSuffix("."),
+        let range = message.range(of: separator)
+      else { continue }
       let identifier = String(
         message[message.index(message.startIndex, offsetBy: prefix.count)..<range.lowerBound])
+      let name = SystemCompatibilityText.name(identifier: identifier)
       let rawState = String(message[range.upperBound...].dropLast())
       let state = SystemCompatibilityProfileState(rawValue: rawState)?.displayName ?? rawState
-      return String(localized: "Compatibility profile \(identifier) is inactive: \(state)")
+      return inactive
+        ? String(localized: "Compatibility profile “\(name)” is inactive: \(state)")
+        : String(localized: "Compatibility profile “\(name)” can’t be turned on: \(state)")
     }
     let suffix = " enabled system-compatibility profiles are inactive."
     if message.hasSuffix(suffix), let count = Int(message.dropLast(suffix.count)) {
@@ -364,6 +656,13 @@ enum RuntimeText {
         localized:
           "Policy revision \(revision) was accepted, but Endpoint Security is unavailable.")
     }
+    if tail.hasPrefix(" is older than active revision ")
+      || tail == " has different contents from the active policy set."
+    {
+      return String(
+        localized: "The saved policies changed after they were loaded. Save again once they reload."
+      )
+    }
     return nil
   }
 }
@@ -378,6 +677,8 @@ enum UserFacingError {
       return policyValidation(error)
     case let error as ExtensionControlClientError:
       return extensionClient(error)
+    case let error as ProgramRuleReaderError:
+      return programRuleReader(error)
     case let error as MaintenanceError:
       return maintenance(error.code, detail: error.detail)
     case let error as AdministrativeAuthorizationError:
@@ -398,11 +699,15 @@ enum UserFacingError {
       switch PasuFSXPCErrorCode(rawValue: nsError.code) {
       case .policyRejected:
         return String(localized: "The extension rejected the policies: \(detail)")
-      case .systemCompatibilitySettingsRejected:
-        return String(
-          localized: "The extension rejected the system compatibility settings: \(detail)")
       case .timeout:
         return String(localized: "The extension did not reply in time: \(detail)")
+      case .authorizationRequired:
+        return String(
+          localized:
+            "This change reduces protection and needs administrator authentication: \(detail)")
+      case .authorizationCanceled:
+        return String(
+          localized: "Administrator authentication was canceled. The policies were not changed.")
       default:
         return String(localized: "The extension reported an error: \(detail)")
       }
@@ -503,6 +808,26 @@ enum UserFacingError {
       return String(localized: "“\(policy)” has two rules with the same internal ID.")
     case .duplicateIdentity(let policy, _):
       return String(localized: "“\(policy)” already has a rule for this program.")
+    case .tooManyCompatibilityProfiles(let policy, _):
+      return String(
+        localized:
+          "“\(policy)” can turn on up to \(PolicySetDocument.maximumCompatibilityProfilesPerPolicy) compatibility profiles."
+      )
+    case .invalidCompatibilityProfileDigest(let policy, _),
+      .duplicateCompatibilityProfile(let policy, _):
+      return String(localized: "“\(policy)” has an invalid compatibility profile entry.")
+    }
+  }
+
+  static func programRuleReader(_ error: ProgramRuleReaderError) -> String {
+    switch error {
+    case .invalidSignature:
+      return String(localized: "The program’s code signature is invalid.")
+    case .unsupportedIdentity:
+      return String(
+        localized:
+          "This program is unsigned or ad-hoc signed. Only developer-signed programs and Apple platform binaries can be added."
+      )
     }
   }
 
@@ -521,6 +846,8 @@ enum UserFacingError {
       )
     case .requestTimedOut:
       String(localized: "The extension did not reply in time.")
+    case .connectionInterrupted:
+      String(localized: "The connection to the extension was interrupted before it replied.")
     case .policyAuditLogUnsupported:
       String(
         localized:
@@ -595,7 +922,7 @@ enum UserFacingError {
     case .applicationRunning:
       return String(
         localized:
-          "Quit Pasu FS normally, then run the installer or uninstaller again. Protection continues when the app quits. Another login session may also have Pasu FS open."
+          "Quit Pasu FS normally, then run the installer again or start uninstalling again from the app. Protection continues when the app quits. Another login session may also have Pasu FS open."
       )
     case .installationPathUnreadable:
       return String(localized: "The installation path could not be inspected.")

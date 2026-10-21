@@ -1,6 +1,8 @@
+import Foundation
+
 /// A stable, hashable representation of the eight 32-bit words in a macOS
-/// `audit_token_t`. The Endpoint Security adapter will be responsible for
-/// converting the kernel token into this value.
+/// `audit_token_t`. The Endpoint Security decoder
+/// (`EndpointDecoder.auditTokenKey`) converts the kernel token into this value.
 public struct AuditTokenKey: Hashable, Sendable {
   public static let wordCount = 8
 
@@ -19,9 +21,9 @@ public enum AuditTokenKeyError: Error, Equatable {
 }
 
 /// Identifies one operating-system process instance without depending on
-/// mutable credential fields in its audit token. The Endpoint Security adapter
+/// mutable credential fields in its audit token. The Endpoint Security decoder
 /// obtains both values through the supported libbsm extraction functions.
-public struct ProcessInstanceKey: Hashable, Sendable {
+public struct ProcessInstanceKey: Codable, Hashable, Sendable {
   public let processID: Int32
   public let processVersion: Int32
 
@@ -40,6 +42,18 @@ public struct ProcessFacts: Equatable, Sendable {
   public let signingIdentifier: String?
   public let isPlatformBinary: Bool
   public let codeSigningFlags: UInt32
+  /// The effective user ID in the audit token, or nil when it was not read.
+  public let effectiveUserID: UInt32?
+  /// The PID of the process that forked this one, as the kernel recorded it at the fork. Unlike
+  /// the current parent, it does not change when the parent exits. Nil when it was not read.
+  public let originalParentProcessID: Int32?
+  /// The current parent process from the audit token Endpoint Security reports for it, and
+  /// that parent's effective user ID; nil when not reported.
+  public let parentProcessInstance: ProcessInstanceKey?
+  public let parentEffectiveUserID: UInt32?
+  /// When the fork that created the process happened, as the kernel recorded it. Replacing the
+  /// executable keeps it. Nil when not reported.
+  public let startTime: Date?
 
   public init(
     auditToken: AuditTokenKey,
@@ -47,7 +61,12 @@ public struct ProcessFacts: Equatable, Sendable {
     teamIdentifier: String?,
     signingIdentifier: String?,
     isPlatformBinary: Bool = false,
-    codeSigningFlags: UInt32 = 0
+    codeSigningFlags: UInt32 = 0,
+    effectiveUserID: UInt32? = nil,
+    originalParentProcessID: Int32? = nil,
+    parentProcessInstance: ProcessInstanceKey? = nil,
+    parentEffectiveUserID: UInt32? = nil,
+    startTime: Date? = nil
   ) {
     self.auditToken = auditToken
     self.processInstance = processInstance
@@ -55,11 +74,16 @@ public struct ProcessFacts: Equatable, Sendable {
     self.signingIdentifier = signingIdentifier
     self.isPlatformBinary = isPlatformBinary
     self.codeSigningFlags = codeSigningFlags
+    self.effectiveUserID = effectiveUserID
+    self.originalParentProcessID = originalParentProcessID
+    self.parentProcessInstance = parentProcessInstance
+    self.parentEffectiveUserID = parentEffectiveUserID
+    self.startTime = startTime
   }
 }
 
 /// Identifies a non-platform program by its exact Team ID and Signing ID pair.
-public struct SignedProgramIdentity: Hashable, Sendable {
+public struct SignedProgramIdentity: Codable, Hashable, Sendable {
   public let teamIdentifier: String
   public let signingIdentifier: String
 
@@ -78,7 +102,7 @@ public struct SignedProgramIdentity: Hashable, Sendable {
 /// The kernel-supplied code-signing identity used by one direct allow rule.
 /// Platform binaries are deliberately distinct from Team ID-signed programs;
 /// a copied binary cannot match merely by reusing a signing identifier string.
-public enum ProgramIdentity: Hashable, Sendable {
+public enum ProgramIdentity: Codable, Hashable, Sendable {
   case teamSigned(SignedProgramIdentity)
   case platformBinary(signingIdentifier: String)
 
@@ -154,8 +178,16 @@ public enum RuleMatch: Equatable, Sendable {
 /// A synchronous, in-memory matcher for direct program identities and observed
 /// descendant inheritance. It has no filesystem access and does not assign an
 /// allow/deny meaning to a match; policy type interpretation stays with the
-/// caller. `decision(for:)` remains as the single-whitelist compatibility API
-/// exercised by the policy evaluator tests.
+/// caller. `decision(for:)` reads a match with the meaning of a single allow
+/// list: a direct or inherited match allows, and no match denies.
+///
+/// The system extension does not use this type. It records process histories
+/// with `ExecutionOriginTracker`, whose decision also covers the first program
+/// of a history, block rules and the system intermediaries, and
+/// `EndpointEventCoordinator` evaluates those histories against each policy and
+/// records the outcome for the policy's mode. This type is a reference
+/// implementation of the descendant inheritance rules, covered by unit tests
+/// only.
 public struct PolicyEvaluator: Sendable {
   private var policy: PolicySnapshot
   private var inheritedRuleByProcess: [ProcessInstanceKey: String] = [:]
@@ -201,6 +233,19 @@ public struct PolicyEvaluator: Sendable {
     observeExec(from: Optional(source), to: process)
   }
 
+  /// Like `observeExec(from:to:)`, but also treats the invoking process as an
+  /// allow root when its own code-signing identity matches an inheritable
+  /// rule. This covers programs whose exec happened before this evaluator
+  /// started observing, such as an app launched before the extension started
+  /// or before its rule was added.
+  public mutating func observeExec(
+    from source: ProcessFacts,
+    to process: ProcessFacts
+  ) {
+    adoptDirectRoot(source)
+    observeExec(from: Optional(source.processInstance), to: process)
+  }
+
   private mutating func observeExec(
     from source: ProcessInstanceKey?,
     to process: ProcessFacts
@@ -239,6 +284,29 @@ public struct PolicyEvaluator: Sendable {
     }
 
     inheritedRuleByProcess[child] = ruleID
+  }
+
+  /// Like `observeFork(parent:child:)`, but also treats the parent as an allow
+  /// root when its own code-signing identity matches an inheritable rule, even
+  /// if its exec was never observed.
+  public mutating func observeFork(
+    parent: ProcessFacts,
+    child: ProcessInstanceKey
+  ) {
+    adoptDirectRoot(parent)
+    observeFork(parent: parent.processInstance, child: child)
+  }
+
+  /// Records a directly matching process as an allow root. The identity comes
+  /// from the kernel-supplied code-signing facts of the current event, so this
+  /// grants nothing beyond what an observed exec of the same program would.
+  private mutating func adoptDirectRoot(_ process: ProcessFacts) {
+    guard let directRule = policy.directRule(for: process),
+      directRule.allowsDescendants
+    else {
+      return
+    }
+    inheritedRuleByProcess[process.processInstance] = directRule.id
   }
 
   public mutating func observeExit(_ process: ProcessInstanceKey) {

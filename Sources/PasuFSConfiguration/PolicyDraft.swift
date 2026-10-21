@@ -4,9 +4,22 @@ public struct DirectoryPolicyDraft: Equatable, Identifiable, Sendable {
   public var id: UUID
   public var name: String
   public var mode: PolicyMode
-  public var policyType: PolicyType
+  public var isBlacklistEnabled: Bool
+  public var allowRules: [PolicyRule]
+  public var denyRules: [PolicyRule]
+  public var systemCompatibilityProfiles: [PolicySystemCompatibilityProfile] = []
+
+  public var policyType: PolicyType {
+    get { isBlacklistEnabled ? .blacklist : .whitelist }
+    set { isBlacklistEnabled = newValue == .blacklist }
+  }
   public var protectedRootPath: String
-  public var rules: [PolicyRule]
+  public var rules: [PolicyRule] {
+    get { isBlacklistEnabled ? denyRules : allowRules }
+    set {
+      if isBlacklistEnabled { denyRules = newValue } else { allowRules = newValue }
+    }
+  }
 
   public init(
     id: UUID = UUID(),
@@ -19,9 +32,10 @@ public struct DirectoryPolicyDraft: Equatable, Identifiable, Sendable {
     self.id = id
     self.name = name
     self.mode = mode
-    self.policyType = policyType
+    self.isBlacklistEnabled = policyType == .blacklist
     self.protectedRootPath = protectedRootPath
-    self.rules = rules
+    self.allowRules = policyType == .whitelist ? rules : []
+    self.denyRules = policyType == .blacklist ? rules : []
   }
 
   public init(policy: DirectoryPolicy) {
@@ -33,6 +47,9 @@ public struct DirectoryPolicyDraft: Equatable, Identifiable, Sendable {
       protectedRootPath: policy.protectedRootPath,
       rules: policy.rules
     )
+    allowRules = policy.allowRules
+    denyRules = policy.denyRules
+    systemCompatibilityProfiles = policy.systemCompatibilityProfiles
   }
 
   public func makePolicy() -> DirectoryPolicy {
@@ -40,9 +57,10 @@ public struct DirectoryPolicyDraft: Equatable, Identifiable, Sendable {
       id: id,
       name: name,
       mode: mode,
-      policyType: policyType,
+      isBlacklistEnabled: isBlacklistEnabled,
       protectedRootPath: protectedRootPath,
-      rules: rules
+      allowRules: allowRules, denyRules: denyRules,
+      systemCompatibilityProfiles: systemCompatibilityProfiles
     )
   }
 

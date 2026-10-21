@@ -1,3 +1,4 @@
+import AppKit
 import PasuFSHostCore
 import SwiftUI
 
@@ -10,6 +11,7 @@ private enum OnboardingStepID: CaseIterable {
 
 struct OnboardingView: View {
   @Bindable var model: AppModel
+  @Environment(\.openSettings) private var openSettings
   @FocusState private var isPrimaryActionFocused: Bool
 
   var body: some View {
@@ -17,6 +19,20 @@ struct OnboardingView: View {
     let steps = OnboardingStepID.allCases
     let current = steps.first { state(of: $0, in: states) == .active } ?? .activate
     let doneCount = steps.filter { state(of: $0, in: states) == .done }.count
+    // The notice that macOS doesn't answer counts the time since its first unanswered request.
+    TimelineView(.periodic(from: .now, by: 2)) { _ in
+      form(steps: steps, states: states, current: current)
+    }
+    .defaultFocus($isPrimaryActionFocused, true)
+    .navigationTitle(String(localized: "Set Up Pasu FS"))
+    .navigationSubtitle(String(localized: "Step \(min(doneCount + 1, 4)) of 4"))
+    .onAppear { model.statusScreen(.setupAssistant, isVisible: true) }
+    .onDisappear { model.statusScreen(.setupAssistant, isVisible: false) }
+  }
+
+  private func form(
+    steps: [OnboardingStepID], states: SetupStepStates, current: OnboardingStepID
+  ) -> some View {
     Form {
       Section {
         ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
@@ -34,6 +50,14 @@ struct OnboardingView: View {
       }
       Section {
         WarningLabel(text: String(localized: "Nothing is protected until setup is finished."))
+        if let item = model.installationStatesUnansweredItem(now: Date()) {
+          AttentionRow(item: item) { action in
+            guard action == .extensionSettings else { return }
+            model.settingsTab = .extensionStatus
+            openSettings()
+            NSApplication.shared.activate()
+          }
+        }
         if let error = model.lastError {
           Label(error, systemImage: "xmark.octagon")
             .foregroundStyle(.red)
@@ -50,9 +74,6 @@ struct OnboardingView: View {
       }
     }
     .formStyle(.grouped)
-    .defaultFocus($isPrimaryActionFocused, true)
-    .navigationTitle(String(localized: "Set Up Pasu FS"))
-    .navigationSubtitle(String(localized: "Step \(min(doneCount + 1, 4)) of 4"))
   }
 
   @ViewBuilder

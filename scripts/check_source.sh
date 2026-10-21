@@ -12,6 +12,13 @@ mkdir -p "$TMPDIR"
 swift -module-cache-path "$scratch/module-cache" scripts/check_public_content.swift
 swift format lint --recursive --strict Package.swift Sources Tests scripts/*.swift
 find Product -type f \( -name '*.plist' -o -name '*.entitlements' -o -name '*.strings' \) -exec plutil -lint {} +
+# The app's display of an extension update that waits for a restart depends on this key.
+[ "$(/usr/libexec/PlistBuddy -c 'Print :NSEndpointSecurityRebootRequired' Product/PasuFSSystemExtension-Info.plist 2>/dev/null || true)" = true ] ||
+  { echo 'Product/PasuFSSystemExtension-Info.plist must set NSEndpointSecurityRebootRequired to true.' >&2; exit 1; }
+# Protection from early in startup, before programs other than Apple platform binaries run,
+# depends on this key.
+[ "$(/usr/libexec/PlistBuddy -c 'Print :NSEndpointSecurityEarlyBoot' Product/PasuFSSystemExtension-Info.plist 2>/dev/null || true)" = true ] ||
+  { echo 'Product/PasuFSSystemExtension-Info.plist must set NSEndpointSecurityEarlyBoot to true.' >&2; exit 1; }
 for file in scripts/*.sh Product/Installer/preinstall Product/Installer/postinstall; do
   sh -n "$file"
 done

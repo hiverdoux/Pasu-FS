@@ -106,7 +106,7 @@ let package = Package(
     ),
     .testTarget(
       name: "PasuFSHostCoreTests",
-      dependencies: ["PasuFSConfiguration", "PasuFSHostCore"]
+      dependencies: ["PasuFSConfiguration", "PasuFSHostCore", "PasuFSIPC"]
     ),
     .testTarget(
       name: "PasuFSAppTests",

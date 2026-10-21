@@ -3,13 +3,13 @@ import Foundation
 public struct ExtensionStorageLocations: Equatable, Sendable {
   public static let legacyPolicyFilename = "policy.json"
   public static let policySetFilename = "policy-set.json"
-  public static let systemCompatibilitySettingsFilename =
+  /// Compatibility approvals of earlier versions; the extension removes the file at start.
+  public static let retiredSystemCompatibilitySettingsFilename =
     "system-compatibility-settings.json"
 
   public let rootDirectory: URL
   public let legacyPolicyFile: URL
   public let policySetFile: URL
-  public let systemCompatibilitySettingsFile: URL
   public let statusFile: URL
   public let auditDirectory: URL
   public let auditFile: URL
@@ -21,8 +21,6 @@ public struct ExtensionStorageLocations: Equatable, Sendable {
       Self.legacyPolicyFilename, isDirectory: false)
     self.policySetFile = standardizedRoot.appendingPathComponent(
       Self.policySetFilename, isDirectory: false)
-    self.systemCompatibilitySettingsFile = standardizedRoot.appendingPathComponent(
-      Self.systemCompatibilitySettingsFilename, isDirectory: false)
     self.statusFile = standardizedRoot.appendingPathComponent("status.json", isDirectory: false)
     self.auditDirectory = standardizedRoot.appendingPathComponent("logs", isDirectory: true)
     self.auditFile = auditDirectory.appendingPathComponent(

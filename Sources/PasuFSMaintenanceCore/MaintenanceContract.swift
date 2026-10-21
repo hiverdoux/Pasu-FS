@@ -134,7 +134,7 @@ public enum MaintenanceErrorCode: String, CaseIterable, Codable, Sendable {
     case .runningApplicationsUnknown: return "Could not check running Pasu FS applications."
     case .applicationRunning:
       return
-        "Quit Pasu FS normally, then run the installer or uninstaller again. Protection continues when the app quits. Another login session may also have Pasu FS open."
+        "Quit Pasu FS normally, then run the installer again or start uninstalling again from the app. Protection continues when the app quits. Another login session may also have Pasu FS open."
     case .installationPathUnreadable: return "Cannot inspect the installation path."
     case .installationPathNotDirectory:
       return "The Pasu FS installation path is not a real directory. No files were changed."

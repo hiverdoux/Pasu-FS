@@ -20,24 +20,10 @@ or notarization workflow.
 
 ### Toolchain and compatibility
 
-Use Xcode 27.0 with Swift 6.4 to reproduce the checked build. The package declares
+Use Xcode 27.1 with Swift 6.4 to reproduce the checked build. The package declares
 Swift tools version 6.0; that declaration alone does not establish compatibility
 with every Swift 6 compiler or SDK. The build Mac must meet Xcode's own requirements,
 which are separate from the app's macOS 14 deployment target.
-
-| Scope | Configuration and limit |
-| --- | --- |
-| Source compilation and automated checks | Xcode 27.0 (27A266a), Swift 6.4, macOS 27.2, Apple silicon. |
-| Installation and runtime checks | macOS 26.6.2 on Apple silicon with development signing: approval, file-open decisions, case-sensitive APFS, symbolic links, updates and removal. |
-| macOS 14 deployment target | Configured in the package and installer; runtime compatibility has not been verified on macOS 14. |
-
-The GitHub Actions workflow selects Xcode 27.0 on the `xcode-27` image and retains
-an Xcode 16.4 / `macos-15` compatibility job. The former image is a
-[public preview](https://github.com/actions/runner-images/issues/14404); its exact
-Xcode build may differ from the checked configuration. Each job prints its actual
-compiler version. The workflow configuration is not evidence that a job has passed:
-check the results for the source revision you use. Neither job installs the product
-or establishes runtime compatibility, and Xcode 16.4 has not been verified locally.
 
 Select Xcode for the current Terminal session without changing the global setting:
 
@@ -49,6 +35,51 @@ xcrun swift --version
 Replace `/path/to/Xcode.app` with your installed Xcode. Complete Xcode's first-launch
 setup if it reports missing components or a license that must be accepted.
 The build produces the architecture of the build Mac; use a compatible test Mac.
+
+The GitHub Actions workflow selects Xcode 27.0 on the `xcode-27` image and retains
+an Xcode 16.4 / `macos-15` compatibility job. The former image is a
+[public preview](https://github.com/actions/runner-images/issues/14404); its exact
+Xcode build may differ from the checked configuration. Each job prints its actual
+compiler version. The workflow configuration is not evidence that a job has passed:
+check the results for the source revision you use. Neither job installs the product
+or establishes runtime compatibility, and Xcode 16.4 has not been verified locally.
+
+The extension uses two Endpoint Security interfaces that macOS 27 added, the
+deadline miss mode and the maximum deadline (see
+[Missed deadlines](architecture.md#missed-deadlines)). It looks their four
+functions up by name at run time, on macOS 27 and later only, instead of
+referring to them in the source, so the package also builds with SDKs that don't
+declare them, such as the one in Xcode 16.4, and the same build runs on earlier
+macOS versions.
+
+| Scope | Configuration and limit |
+| --- | --- |
+| Source compilation and automated checks | Xcode 27.1 (27A9275), Swift 6.4, macOS 27.2, Apple silicon. |
+| Installation and runtime checks | macOS 26.6.2 and macOS 27.0.1 on Apple silicon with development signing. [Verified configurations](#verified-configurations) lists what was checked in each configuration and what has not been. |
+| macOS 14 deployment target | Configured in the package and installer; runtime compatibility has not been verified on macOS 14. |
+
+### Verified configurations
+
+The table separates normal installation checks from checks with System
+Integrity Protection (SIP), a macOS system safeguard, disabled. "Launch daemon"
+means that the packaged executable ran as a background service rather than as
+an approved system extension. Those results do not establish behavior under
+normal SIP-enabled installation.
+
+| Configuration | Checked scope |
+| --- | --- |
+| macOS 26, SIP enabled, approved system extension; an earlier Pasu FS release | System Settings approval, file-open decisions, case-sensitive APFS, symbolic links, updates and removal. This does not validate the current release's startup or update behavior. |
+| macOS 26.6.2, SIP disabled, launch daemon | File requests, folder following, retired paths, request delivery, policy schema 4 migration, App Container Management, XProtect remediator plug-ins and default deadline behavior. |
+| macOS 27.0.1, SIP disabled, launch daemon | File requests and mounts, folder following, retired paths, App Container Management, XProtect remediator plug-ins and profile invalidation after a permission change, rejection of the user-session XProtect analysis service, Finder file/folder copies and Time Machine screen restores, schema 5 policy preservation, completed-save durability, shortened fail-closed deadlines and stalled-extension reporting. |
+| macOS 27.0.1, SIP disabled, approved system extension | Immediate and restart-dependent extension updates, pending updates, deactivation and removal; early startup, execution histories for preexisting Apple processes and policy behavior on volumes mounted at startup. |
+
+The current update and early-startup behavior has not been verified on macOS 26
+or earlier or with SIP enabled. A root XProtect analysis-service scan of a
+protected folder has not been verified end to end; its admission rules are
+covered by automated tests. Finder copies and Time Machine screen restores
+with the compatibility profile enabled remain unverified on macOS 26.6.2.
+See [system compatibility](using.md#system-compatibility) for other unverified
+operations and [security boundaries](threat-model.md) for protection limits.
 
 ## Configure your identifiers and signing
 
@@ -89,6 +120,12 @@ from the repository root. Absolute paths are also accepted in this local file.
 `PASU_FS_SIGNING_CONFIG` can select a different local JSON configuration; a
 relative value is also resolved from the repository root.
 
+A linked worktree is an additional checkout of the same repository made with
+`git worktree add`; the original checkout is the main worktree. When you build in
+a linked worktree, a relative configuration or profile path that does not exist in
+that worktree is resolved from the main worktree instead, so the linked worktree
+needs no copy of the signing files.
+
 The builder substitutes the app identifier consistently into a temporary copy of
 the product sources, property lists, services, authorization rights and installer.
 It does not put your identifier into the checked-in source. The compiler and tests
@@ -125,8 +162,12 @@ the English and Korean resources of the app and extension with Xcode's
 `xcstringstool`. Each executable records the macOS SDK version of the build Mac;
 macOS uses that record to draw the app with the current system design, and the
 build stops if an executable records a different SDK. The installer includes the
-app and system maintenance service.
-The PKG itself is unsigned. Keychain may ask you to authorize use of the private key.
+app and system maintenance service. Every component must be signed with the hardened
+runtime (`codesign --options runtime`) because without it another program running under
+the same user account can take control of the running app or extension and act with its
+identity; the build also requests a secure timestamp so the signatures stay valid after
+the certificate expires. The PKG itself is unsigned. Keychain may ask you to authorize
+use of the private key.
 
 The numeric build number increases automatically using `.local/build-sequence.json`.
 It is never lower than the `CFBundleVersion` in the product Info.plist templates
@@ -138,13 +179,28 @@ record when changing branches or restoring older source. To start on a new build
 Mac when an installed product has a higher number, choose a greater number explicitly:
 
 ```sh
-./scripts/build_installer.sh --build-number 100
+./scripts/build_installer.sh --build-number NUMBER
 ```
 
-Use a number greater than every build already issued for your installation and
-at least the template's `CFBundleVersion`.
+`NUMBER` must be greater than every build number recorded as issued in your
+checkout and at least the `CFBundleVersion` of the templates under `Product/`;
+otherwise the build stops with `The requested build number must exceed every
+previously issued number and meet the product template minimum.` Also choose
+it above the installed build, which the record doesn't know, because the
+installer rejects a lower build.
 The displayed version comes from the product Info.plist templates; keep the app
 and extension display versions equal when preparing a new version.
+
+In a linked worktree, the builder reads and advances the record and its lock in
+`.local/` of the main worktree, so all worktrees of one repository draw from one
+sequence and never issue the same number. A record that an earlier build left in
+the linked worktree is also read, so numbers do not go back. The ZIP and PKG are
+still written to `.local/dist/` of the worktree you build in. The builder finds
+the main worktree with `git rev-parse`, which needs Git 2.31 or later and a
+repository whose Git directory is the `.git` folder of the main worktree; if Git
+cannot determine it, the worktree's own `.local/` is used. To choose the folder
+yourself, set `PASU_FS_LOCAL_ROOT` to the checkout whose `.local/` holds the
+record and signing files.
 
 Do not run product builds concurrently in the same checkout. A failed build may
 leave the previous successful ZIP or PKG. Check the command's exit status and
@@ -172,20 +228,24 @@ Source code contains the English text. Translations are kept in these files:
 
 A String Catalog (`.xcstrings`) is a JSON file that Xcode can edit. After changing
 user-facing text, run `./scripts/check_source.sh`. Its localization check lists
-text without a Korean translation, catalog entries the app no longer uses and
-installer files or messages missing in a language. The three administrator
-password prompts that macOS shows for Pasu FS operations are catalog entries with
-a manual extraction state: macOS reads them from the installed app when the
-installer registers the operations, so the check does not expect them in the
-app's source code. Messages from the system
-extension and the command-line tools are in English; the app shows known extension
-messages in the selected language.
+text without a Korean translation, catalog entries the app no longer uses,
+installer files or messages missing in a language, and Korean text in
+`Localizable.xcstrings` that offers both forms of a particle, as in `을(를)`.
+A Korean particle's form depends on the sound before it, so write such a
+sentence so that no particle follows the inserted value. The four
+administrator password prompts that macOS shows for Pasu FS operations
+(activating the extension, deactivating it, uninstalling, and saving a policy
+change that reduces protection) are catalog entries with a manual extraction
+state: macOS reads them from the installed app when the installer registers the
+operations, so the check does not expect them in the app's source code.
+Messages from the system extension and the command-line tools are in English;
+the app shows known extension messages in the selected language.
 
 ## Troubleshooting
 
 | Error | Action |
 | --- | --- |
-| Missing signing configuration or profile | Check your JSON filename and the profile paths. |
+| Missing signing configuration or profile | Check your JSON filename and the profile paths. A linked worktree uses the files of the main worktree when it has none of its own. |
 | Profile App ID mismatch | Use profiles for the exact app identifier and its `.endpointsecurity` extension. |
 | Expired profile or missing entitlement | Renew the profile with the required capability and registered test devices. |
 | No matching signing identity | Import the certificate into Keychain with its private key, or select the right certificate fingerprint. |

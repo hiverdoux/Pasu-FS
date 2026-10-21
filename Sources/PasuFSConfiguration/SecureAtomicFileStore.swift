@@ -33,16 +33,57 @@ public enum SecureFileStoreError: Error, Equatable, CustomStringConvertible, Sen
   }
 }
 
+/// How far a write is made durable before `SecureAtomicFileStore.write` returns.
+public enum SecureFileDurability: Sendable {
+  /// `fsync` on the file and on its directory. The data reaches the storage device, which may
+  /// still keep it in its own cache, so a sudden loss of power can lose a recent write.
+  case fileSystem
+  /// `fsync` and then `fcntl(F_FULLFSYNC)` on the file and on its directory, which asks the device
+  /// to write its cache out, so a write that returned survives a sudden loss of power. On a
+  /// volume that doesn't support `F_FULLFSYNC` (`ENOTSUP` or `EINVAL`) the write keeps the
+  /// `fsync` result, and the store reports it through `fullSynchronizationUnavailable`.
+  case storageDevice
+}
+
+/// The synchronization calls of a store. Tests replace them to observe their order and to fail
+/// them; each returns the system call's result and leaves its error in `errno`.
+public struct SecureFileSynchronization: Sendable {
+  public var fsync: @Sendable (Int32) -> Int32
+  public var fullFsync: @Sendable (Int32) -> Int32
+
+  public init(
+    fsync: @escaping @Sendable (Int32) -> Int32,
+    fullFsync: @escaping @Sendable (Int32) -> Int32
+  ) {
+    self.fsync = fsync
+    self.fullFsync = fullFsync
+  }
+
+  public static let system = SecureFileSynchronization(
+    fsync: { Darwin.fsync($0) },
+    fullFsync: { fcntl($0, F_FULLFSYNC) })
+}
+
 public final class SecureAtomicFileStore: @unchecked Sendable {
   public let rootDirectory: URL
   public let requiredOwnerUserID: UInt32?
+  private let synchronization: SecureFileSynchronization
+  /// Called with the operation and `errno` when `F_FULLFSYNC` is not supported and a
+  /// `storageDevice` write keeps the `fsync` result instead.
+  private let fullSynchronizationUnavailable: (@Sendable (String, Int32) -> Void)?
 
   /// The parents of the root are kept as their physical path so descriptor-relative removal of
   /// the same files never meets a symbolic-link alias such as `/tmp` or `/var`. The root itself
   /// is not resolved: a root that is a symbolic link is refused when it is opened.
-  public init(rootDirectory: URL, requiredOwnerUserID: UInt32?) {
+  public init(
+    rootDirectory: URL, requiredOwnerUserID: UInt32?,
+    synchronization: SecureFileSynchronization = .system,
+    fullSynchronizationUnavailable: (@Sendable (String, Int32) -> Void)? = nil
+  ) {
     self.rootDirectory = PhysicalPath.resolve(rootDirectory)
     self.requiredOwnerUserID = requiredOwnerUserID
+    self.synchronization = synchronization
+    self.fullSynchronizationUnavailable = fullSynchronizationUnavailable
   }
 
   public func prepareDirectory(mode: mode_t = 0o755) throws {
@@ -70,7 +111,8 @@ public final class SecureAtomicFileStore: @unchecked Sendable {
   public func write(
     _ data: Data,
     to filename: String,
-    mode: mode_t
+    mode: mode_t,
+    durability: SecureFileDurability = .fileSystem
   ) throws {
     try validateFilename(filename)
     let directoryDescriptor = try openDirectory()
@@ -116,9 +158,7 @@ public final class SecureAtomicFileStore: @unchecked Sendable {
     guard fchmod(fileDescriptor, mode) == 0 else {
       throw systemCall("fchmod temporary file")
     }
-    guard fsync(fileDescriptor) == 0 else {
-      throw systemCall("fsync temporary file")
-    }
+    try synchronize(fileDescriptor, durability: durability, what: "temporary file")
 
     let renameResult = temporaryName.withCString { temporaryPointer in
       filename.withCString { destinationPointer in
@@ -134,9 +174,7 @@ public final class SecureAtomicFileStore: @unchecked Sendable {
       throw systemCall("renameat secure-store file")
     }
     shouldRemoveTemporaryFile = false
-    guard fsync(directoryDescriptor) == 0 else {
-      throw systemCall("fsync secure-store directory")
-    }
+    try synchronize(directoryDescriptor, durability: durability, what: "secure-store directory")
   }
 
   public func read(
@@ -235,9 +273,23 @@ public final class SecureAtomicFileStore: @unchecked Sendable {
     guard unlinkResult == 0 else {
       throw systemCall("unlinkat secure-store file")
     }
-    guard fsync(directoryDescriptor) == 0 else {
-      throw systemCall("fsync secure-store directory")
+    try synchronize(directoryDescriptor, durability: .fileSystem, what: "secure-store directory")
+  }
+
+  /// `fsync`, then for `storageDevice` `F_FULLFSYNC`. An unsupported `F_FULLFSYNC` keeps the
+  /// `fsync` result; any other failure is an error.
+  private func synchronize(
+    _ descriptor: Int32, durability: SecureFileDurability, what: String
+  ) throws {
+    guard synchronization.fsync(descriptor) == 0 else {
+      throw systemCall("fsync \(what)")
     }
+    guard durability == .storageDevice, synchronization.fullFsync(descriptor) != 0 else { return }
+    let code = errno
+    guard code == ENOTSUP || code == EINVAL else {
+      throw SecureFileStoreError.systemCall(operation: "F_FULLFSYNC \(what)", code: code)
+    }
+    fullSynchronizationUnavailable?("F_FULLFSYNC \(what)", code)
   }
 
   private func openDirectory() throws -> Int32 {

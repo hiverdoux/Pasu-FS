@@ -1,9 +1,21 @@
 import Foundation
+import PasuFSConfiguration
 import XCTest
 
 @testable import PasuFSEndpointCore
 
 final class ProtectedPathScopeTests: XCTestCase {
+  func testPreservesPhysicalPrivatePrefixReportedByEndpointSecurity() throws {
+    let root = "/private/tmp/PasuFSPhysicalScope-\(UUID().uuidString)"
+    try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: root) }
+    let throughAlias = String(root.dropFirst("/private".count))
+    for selected in [root, throughAlias] {
+      let scope = try ProtectedPathScope(root: selected)
+      XCTAssertEqual(scope.root, root)
+      XCTAssertTrue(scope.contains(root + "/sample.txt"))
+    }
+  }
   func testContainsRootAndDescendantsButNotSiblingPrefix() throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.base) }
@@ -61,7 +73,7 @@ final class ProtectedPathScopeTests: XCTestCase {
     let link = fixture.base.appendingPathComponent("selected-link")
     try FileManager.default.createSymbolicLink(at: link, withDestinationURL: fixture.protected)
     let scope = try ProtectedPathScope(root: link.path, homeDirectory: fixture.home.path)
-    XCTAssertEqual(scope.root, fixture.protected.resolvingSymlinksInPath().path)
+    XCTAssertEqual(scope.root, fixture.protected.path)
     XCTAssertTrue(scope.contains(scope.root + "/file"))
     XCTAssertFalse(scope.contains(link.path + "/file"))
   }
@@ -81,7 +93,7 @@ final class ProtectedPathScopeTests: XCTestCase {
     ) { error in
       XCTAssertEqual(
         error as? ProtectedPathScopeError,
-        .unsafeRoot(fixture.home.standardizedFileURL.path)
+        .unsafeRoot(fixture.home.path)
       )
     }
   }
@@ -99,8 +111,9 @@ final class ProtectedPathScopeTests: XCTestCase {
   }
 
   private func makeFixture() throws -> (base: URL, home: URL, protected: URL) {
-    let base = FileManager.default.temporaryDirectory
-      .appendingPathComponent("PasuFSEndpointCoreTests-\(UUID().uuidString)")
+    let base = PhysicalPath.resolve(
+      FileManager.default.temporaryDirectory
+        .appendingPathComponent("PasuFSEndpointCoreTests-\(UUID().uuidString)"))
     let home = base.appendingPathComponent("home")
     let protected = home.appendingPathComponent("PasuFSTest")
     try FileManager.default.createDirectory(at: protected, withIntermediateDirectories: true)

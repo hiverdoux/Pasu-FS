@@ -2,55 +2,66 @@ import PasuFSConfiguration
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Adds a program to a policy's list, or edits an existing rule.
+/// Adds programs to one of a policy's lists, or edits an existing rule.
 struct AddProgramSheet: View {
   @Bindable var model: AppModel
   let policyID: UUID
+  let list: PolicyRuleList
   let editingRule: PolicyRule?
   let preselected: AuditRuleCandidate?
 
   @Environment(\.dismiss) private var dismiss
+  @AppStorage(ProgramSortOrder.defaultsKey) private var sortOrder = ProgramSortOrder.default
   @State private var source: Source
-  @State private var selectedCandidateID: String?
+  @State private var selectedCandidateIDs: Set<String>
   @State private var applicationCandidate: AuditRuleCandidate?
   @State private var applicationError: String?
+  /// The program whose signature is being checked. A newer choice replaces it.
+  @State private var readingProgramURL: URL?
   @State private var kind: PolicyRuleKind
   @State private var teamIdentifier: String
   @State private var signingIdentifier: String
-  @State private var includesChildProcesses: Bool
+  @State private var allowsDescendants: Bool
   @State private var filterText = ""
   @State private var isChoosingApplication = false
   @State private var errorMessage: String?
+  /// The policy chosen as the source of copies, once one has been chosen.
+  @State private var chosenSourcePolicyID: UUID?
+  @State private var selectedSourceRuleIDs: Set<String> = []
 
   enum Source: Hashable {
     case recent
     case application
     case manual
+    case policy
   }
 
   init(model: AppModel, request: AddProgramRequest) {
     self.model = model
     policyID = request.policyID
+    list = request.list
     editingRule = nil
     preselected = request.preselected
     _source = State(initialValue: .recent)
-    _selectedCandidateID = State(initialValue: request.preselected?.id)
+    _selectedCandidateIDs = State(initialValue: request.preselected.map { [$0.id] } ?? [])
     _kind = State(initialValue: .teamSigned)
     _teamIdentifier = State(initialValue: "")
     _signingIdentifier = State(initialValue: "")
-    _includesChildProcesses = State(initialValue: false)
+    _allowsDescendants = State(initialValue: false)
   }
 
-  init(model: AppModel, policyID: UUID, editing rule: PolicyRule) {
+  init(model: AppModel, policyID: UUID, list: PolicyRuleList, editing rule: PolicyRule) {
     self.model = model
     self.policyID = policyID
+    self.list = list
     editingRule = rule
     preselected = nil
     _source = State(initialValue: .manual)
+    _selectedCandidateIDs = State(initialValue: [])
     _kind = State(initialValue: rule.kind)
     _teamIdentifier = State(initialValue: rule.teamIdentifier ?? "")
     _signingIdentifier = State(initialValue: rule.signingIdentifier)
-    _includesChildProcesses = State(initialValue: rule.allowsDescendants)
+    _allowsDescendants = State(initialValue: list == .allow && rule.allowsDescendants)
   }
 
   var body: some View {
@@ -59,8 +70,9 @@ struct AddProgramSheet: View {
         if editingRule == nil {
           Picker("Source", selection: $source) {
             Text("Recent Access").tag(Source.recent)
-            Text("Application").tag(Source.application)
+            Text("App or Executable").tag(Source.application)
             Text("Manual Entry").tag(Source.manual)
+            Text("Other Policy").tag(Source.policy)
           }
           .pickerStyle(.segmented)
           .labelsHidden()
@@ -75,8 +87,12 @@ struct AddProgramSheet: View {
         applicationSection
       case .manual:
         manualSection
+      case .policy:
+        policySection
       }
-      childProcessSection
+      if list == .allow {
+        descendantsSection
+      }
       if let errorMessage {
         Section {
           Label(errorMessage, systemImage: "exclamationmark.circle")
@@ -95,7 +111,7 @@ struct AddProgramSheet: View {
         Button(editingRule == nil ? "Add" : "Save") {
           commit()
         }
-        .disabled(currentCandidate == nil)
+        .disabled(additions.isEmpty)
       }
     }
     .formSheetSizing()
@@ -106,16 +122,45 @@ struct AddProgramSheet: View {
     }
   }
 
+  /// The descendant option for the programs being added. A copy keeps the setting of the rule
+  /// it is made from, so with that source the section only points out a copy that has it on.
+  @ViewBuilder
+  private var descendantsSection: some View {
+    if source == .policy {
+      if copies.contains(where: \.allowsDescendants) {
+        Section {
+          WarningLabel(
+            text: String(localized: "A selected rule includes descendant processes."))
+        }
+      }
+    } else {
+      Section {
+        Toggle("Include descendant processes", isOn: $allowsDescendants)
+        if allowsDescendants {
+          WarningLabel(
+            text: String(localized: "Programs it starts can also access this folder."))
+        }
+      }
+    }
+  }
+
   // MARK: - Recent access
 
-  private var candidates: [AuditRuleCandidate] {
+  /// The signed programs of the policy's log, with the preselected one first.
+  private var allCandidates: [AuditRuleCandidate] {
     var list = model.ruleCandidates(policyID: policyID)
     if let preselected, !list.contains(where: { $0.id == preselected.id }) {
       list.insert(preselected, at: 0)
     }
+    return list
+  }
+
+  /// The candidates that match the search text. The selection is kept across searches, so a
+  /// program chosen before a search is still added while the search hides it.
+  private var candidates: [AuditRuleCandidate] {
     let needle = filterText.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !needle.isEmpty else { return list }
-    return list.filter {
+    guard !needle.isEmpty else { return allCandidates }
+    return allCandidates.filter {
       [$0.displayName, $0.signingIdentifier, $0.teamIdentifier, $0.executablePath]
         .compactMap { $0 }
         .contains { $0.localizedCaseInsensitiveContains(needle) }
@@ -132,10 +177,11 @@ struct AddProgramSheet: View {
           systemImage: "list.bullet.rectangle"
         )
       } else {
-        List(candidates, selection: $selectedCandidateID) { candidate in
+        List(candidates, selection: $selectedCandidateIDs) { candidate in
           CandidateRow(
             candidate: candidate,
-            isAlreadyAdded: model.policyContainsIdentity(policyID: policyID, candidate: candidate))
+            isAlreadyAdded: model.policyContainsIdentity(
+              policyID: policyID, list: list, candidate: candidate))
         }
         .frame(minHeight: 220)
       }
@@ -147,8 +193,14 @@ struct AddProgramSheet: View {
   private var applicationSection: some View {
     Section {
       LabeledContent {
-        Button("Choose Application…") {
-          isChoosingApplication = true
+        HStack {
+          if readingProgramURL != nil {
+            ProgressView()
+              .controlSize(.small)
+          }
+          Button("Choose…") {
+            isChoosingApplication = true
+          }
         }
       } label: {
         if let applicationCandidate {
@@ -163,7 +215,7 @@ struct AddProgramSheet: View {
               executablePath: applicationCandidate.executablePath, size: 32)
           }
         } else {
-          Text("Drag an application here")
+          Text("Drag an app or executable here")
         }
       }
       if let applicationError {
@@ -172,16 +224,16 @@ struct AddProgramSheet: View {
     }
     .dropDestination(for: URL.self) { urls, _ in
       guard let url = urls.first else { return false }
-      readApplication(url)
+      readProgram(url)
       return true
     }
     .fileImporter(
       isPresented: $isChoosingApplication,
-      allowedContentTypes: [.application],
+      allowedContentTypes: [.application, .unixExecutable, .executable],
       allowsMultipleSelection: false
     ) { result in
       if case .success(let urls) = result, let url = urls.first {
-        readApplication(url)
+        readProgram(url)
       }
     }
   }
@@ -206,13 +258,59 @@ struct AddProgramSheet: View {
     }
   }
 
-  // MARK: - Child processes
+  // MARK: - Other policy
 
-  private var childProcessSection: some View {
+  /// The other policies, in sidebar order.
+  private var otherPolicies: [DirectoryPolicyDraft] {
+    model.sidebarPolicies.filter { $0.id != policyID }
+  }
+
+  /// The chosen policy, or until one is chosen, the first other policy with programs in this
+  /// list, or else the first other policy.
+  private var sourcePolicy: DirectoryPolicyDraft? {
+    let policies = otherPolicies
+    if let chosen = policies.first(where: { $0.id == chosenSourcePolicyID }) {
+      return chosen
+    }
+    return policies.first { !$0[list].isEmpty } ?? policies.first
+  }
+
+  /// The source policy's rules of this list, in the chosen sort order.
+  private var sourceRules: [PolicyRule] {
+    sortOrder.sorted(sourcePolicy?[list] ?? []) { model.ruleDisplayName(for: $0) }
+  }
+
+  private var sourcePolicyBinding: Binding<UUID?> {
+    Binding(
+      get: { sourcePolicy?.id },
+      set: { id in
+        chosenSourcePolicyID = id
+        selectedSourceRuleIDs = []
+      })
+  }
+
+  private var policySection: some View {
     Section {
-      Toggle("Include child processes", isOn: $includesChildProcesses)
-      if includesChildProcesses {
-        WarningLabel(text: PolicyBehaviorText.descendantsWarning(policyType))
+      if otherPolicies.isEmpty {
+        ContentUnavailableView("No Other Policies", systemImage: "lock.doc")
+      } else {
+        Picker("Policy", selection: sourcePolicyBinding) {
+          ForEach(otherPolicies) { policy in
+            Text(policy.name.isEmpty ? String(localized: "Untitled Policy") : policy.name)
+              .tag(Optional(policy.id))
+          }
+        }
+        if sourceRules.isEmpty {
+          ContentUnavailableView("No Programs to Copy", systemImage: "list.bullet.rectangle")
+        } else {
+          List(sourceRules, selection: $selectedSourceRuleIDs) { rule in
+            SourceRuleRow(
+              rule: rule, list: list, displayName: model.ruleDisplayName(for: rule),
+              isAlreadyAdded: model.policyContainsIdentity(
+                policyID: policyID, list: list, rule: rule))
+          }
+          .frame(minHeight: 220)
+        }
       }
     }
   }
@@ -223,61 +321,105 @@ struct AddProgramSheet: View {
     model.policyDraft(id: policyID)
   }
 
-  private var policyType: PolicyType {
-    policy?.policyType ?? .whitelist
-  }
-
   private var title: String {
     if editingRule != nil { return String(localized: "Edit Program") }
-    switch policyType {
-    case .whitelist: return String(localized: "Add a Program to Allow")
-    case .blacklist: return String(localized: "Add a Program to Block")
+    switch list {
+    case .allow: return String(localized: "Add a Program to Allow")
+    case .deny: return String(localized: "Add a Program to Block")
     }
   }
 
   private var subtitle: String {
     guard let policy else { return "" }
-    return "\(policy.name) · \(policy.mode.displayName) · \(policy.policyType.displayName)"
+    return "\(policy.name) · \(policy.mode.displayName)"
   }
 
   // MARK: - Actions
 
-  private var currentCandidate: AuditRuleCandidate? {
-    switch source {
-    case .recent:
-      guard let selectedCandidateID,
-        let candidate = candidates.first(where: { $0.id == selectedCandidateID }),
-        !model.policyContainsIdentity(policyID: policyID, candidate: candidate)
-      else { return nil }
-      return candidate
-    case .application:
-      return applicationCandidate
-    case .manual:
-      let signing = signingIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
-      let team = teamIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard !signing.isEmpty, kind == .platformBinary || !team.isEmpty else { return nil }
-      return model.manualCandidate(kind: kind, teamIdentifier: team, signingIdentifier: signing)
+  /// What Add puts in the list.
+  private enum Additions {
+    case programs([AuditRuleCandidate])
+    case copies([PolicyRule])
+
+    var isEmpty: Bool {
+      switch self {
+      case .programs(let candidates): candidates.isEmpty
+      case .copies(let rules): rules.isEmpty
+      }
     }
   }
 
-  private func readApplication(_ url: URL) {
-    do {
-      applicationCandidate = try model.applicationCandidate(at: url)
-      applicationError = nil
-    } catch {
-      applicationCandidate = nil
-      applicationError = UserFacingError.message(error)
+  /// The chosen programs that are not in the list yet. A program chosen in the file dialog or
+  /// entered by hand is kept even when the list has it, so that adding it reports why.
+  private var additions: Additions {
+    switch source {
+    case .recent:
+      .programs(
+        allCandidates.filter {
+          selectedCandidateIDs.contains($0.id)
+            && !model.policyContainsIdentity(policyID: policyID, list: list, candidate: $0)
+        })
+    case .application:
+      .programs(applicationCandidate.map { [$0] } ?? [])
+    case .manual:
+      .programs(manualCandidate.map { [$0] } ?? [])
+    case .policy:
+      .copies(copies)
+    }
+  }
+
+  /// The selected rules of the source policy whose programs are not in the list yet.
+  private var copies: [PolicyRule] {
+    sourceRules.filter {
+      selectedSourceRuleIDs.contains($0.id)
+        && !model.policyContainsIdentity(policyID: policyID, list: list, rule: $0)
+    }
+  }
+
+  private var manualCandidate: AuditRuleCandidate? {
+    let signing = signingIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
+    let team = teamIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !signing.isEmpty, kind == .platformBinary || !team.isEmpty else { return nil }
+    return model.manualCandidate(kind: kind, teamIdentifier: team, signingIdentifier: signing)
+  }
+
+  /// Checks the program's code signature in the background. The result of an earlier choice is
+  /// dropped when another program has been chosen since.
+  private func readProgram(_ url: URL) {
+    readingProgramURL = url
+    applicationCandidate = nil
+    applicationError = nil
+    Task {
+      let result: Result<AuditRuleCandidate, any Error>
+      do {
+        result = .success(try await model.programCandidate(at: url))
+      } catch {
+        result = .failure(error)
+      }
+      guard readingProgramURL == url else { return }
+      readingProgramURL = nil
+      switch result {
+      case .success(let candidate): applicationCandidate = candidate
+      case .failure(let error): applicationError = UserFacingError.message(error)
+      }
     }
   }
 
   private func commit() {
-    guard let candidate = currentCandidate else { return }
     do {
       if let editingRule {
+        guard let candidate = manualCandidate else { return }
         try saveEdit(of: editingRule, as: candidate)
       } else {
-        try model.addRule(
-          policyID: policyID, from: candidate, allowsDescendants: includesChildProcesses)
+        switch additions {
+        case .programs(let candidates):
+          guard !candidates.isEmpty else { return }
+          try model.addRules(
+            policyID: policyID, to: list, from: candidates, allowsDescendants: allowsDescendants)
+        case .copies(let rules):
+          guard !rules.isEmpty else { return }
+          try model.addRules(policyID: policyID, to: list, copying: rules)
+        }
       }
       dismiss()
     } catch {
@@ -286,7 +428,8 @@ struct AddProgramSheet: View {
   }
 
   private func saveEdit(of rule: PolicyRule, as candidate: AuditRuleCandidate) throws {
-    let others = policy?.rules.filter { $0.id != rule.id } ?? []
+    // An identity is unique within its list; the other list may name the same program.
+    let others = policy?[list].filter { $0.id != rule.id } ?? []
     let duplicate = others.contains {
       PolicyProgramSummarizer.ruleKey($0) == candidate.id
     }
@@ -295,7 +438,7 @@ struct AddProgramSheet: View {
     updated.kind = candidate.kind
     updated.teamIdentifier = candidate.kind == .teamSigned ? candidate.teamIdentifier : nil
     updated.signingIdentifier = candidate.signingIdentifier
-    updated.allowsDescendants = includesChildProcesses
+    updated.allowsDescendants = list == .allow && allowsDescendants
     model.updateRule(policyID: policyID, rule: updated)
   }
 }
@@ -330,6 +473,54 @@ private struct CandidateRow: View {
       }
     }
     .foregroundStyle(isAlreadyAdded ? .secondary : .primary)
+  }
+}
+
+/// A rule of another policy, shown with the settings a copy of it keeps.
+private struct SourceRuleRow: View {
+  let rule: PolicyRule
+  let list: PolicyRuleList
+  let displayName: String
+  let isAlreadyAdded: Bool
+
+  var body: some View {
+    HStack {
+      ProgramIcon(signingIdentifier: rule.signingIdentifier, executablePath: nil, size: 32)
+      VStack(alignment: .leading) {
+        HStack {
+          Text(displayName)
+            .lineLimit(1)
+          if !rule.isEnabled {
+            Text("Off")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+          if list == .allow && rule.allowsDescendants {
+            Image(systemName: "arrow.triangle.branch")
+              .foregroundStyle(.secondary)
+              .help("Include descendant processes")
+              .accessibilityLabel("Include descendant processes")
+          }
+        }
+        SignatureLine(kind: rule.kind.displayName, identifiers: identifiers)
+      }
+      Spacer()
+      if isAlreadyAdded {
+        Text("Already added")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+    }
+    .foregroundStyle(isAlreadyAdded ? .secondary : .primary)
+  }
+
+  private var identifiers: String {
+    switch rule.kind {
+    case .teamSigned:
+      "\(rule.teamIdentifier ?? "—") · \(rule.signingIdentifier)"
+    case .platformBinary:
+      rule.signingIdentifier
+    }
   }
 }
 

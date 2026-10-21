@@ -38,7 +38,6 @@ struct PasuFSApp: App {
     .defaultSize(width: 1080, height: 740)
     .commands {
       SidebarCommands()
-      InspectorCommands()
       CommandGroup(replacing: .newItem) {
         Button("New Policy") {
           model.createNewPolicy()
@@ -52,6 +51,11 @@ struct PasuFSApp: App {
       CommandGroup(before: .sidebar) {
         RefreshMenuCommand()
         Divider()
+        ProgramSortMenuCommand()
+        Divider()
+      }
+      CommandGroup(after: .sidebar) {
+        InspectorMenuCommand()
       }
       CommandGroup(replacing: .appTermination) {
         StopProtectionAndQuitButton(model: model)
@@ -103,8 +107,9 @@ private struct MenuBarContentView: View {
       NSApplication.shared.activate()
     }
     Button("Refresh Status") {
-      Task { await model.refreshHealth() }
+      Task { await model.refreshStatusNow() }
     }
+    .disabled(model.isRefreshingStatus)
     Divider()
     StopProtectionAndQuitButton(model: model)
     QuitPasuFSButton(model: model)

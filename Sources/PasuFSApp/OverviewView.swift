@@ -8,26 +8,30 @@ struct OverviewView: View {
   @Environment(\.openSettings) private var openSettings
 
   var body: some View {
-    Form {
-      Section {
-        StatusHeader(model: model)
-        EvidenceRow(model: model)
-      }
+    // Ages, and the items that depend on them, change with time while the model stays the
+    // same, so the form is drawn again every 2 seconds.
+    TimelineView(.periodic(from: .now, by: 2)) { _ in
+      Form {
+        Section {
+          StatusHeader(model: model)
+          EvidenceRow(model: model)
+        }
 
-      let items = model.attentionItems()
-      if !items.isEmpty {
-        Section("Needs attention") {
-          ForEach(items) { item in
-            AttentionRow(item: item, perform: perform)
+        let items = model.attentionItems(now: Date())
+        if !items.isEmpty {
+          Section("Needs attention") {
+            ForEach(items) { item in
+              AttentionRow(item: item, perform: perform)
+            }
           }
         }
-      }
 
-      policiesSection
-      recentDenialsSection
-      versionSection
+        policiesSection
+        recentDenialsSection
+        versionSection
+      }
+      .formStyle(.grouped)
     }
-    .formStyle(.grouped)
     .navigationTitle(String(localized: "Overview"))
     .toolbar {
       ToolbarItem {
@@ -36,11 +40,14 @@ struct OverviewView: View {
         } label: {
           Label("Refresh", systemImage: "arrow.clockwise")
         }
-        .disabled(model.isBusy)
+        .disabled(model.isBusy || model.isRefreshingStatus)
         .help("Refresh the status now")
       }
     }
-    .focusedSceneValue(\.refreshCommand, RefreshCommandAction(perform: refresh))
+    .focusedSceneValue(
+      \.refreshCommand,
+      RefreshCommandAction(isInProgress: model.isRefreshingStatus, perform: refresh)
+    )
     .task {
       while !Task.isCancelled {
         await model.refreshPolicyAuditLogs()
@@ -51,7 +58,7 @@ struct OverviewView: View {
 
   private func refresh() {
     Task {
-      await model.refreshHealth()
+      await model.refreshStatusNow()
       await model.refreshPolicyAuditLogs()
     }
   }
@@ -125,28 +132,26 @@ struct OverviewView: View {
 
   private var versionSection: some View {
     Section {
-      TimelineView(.periodic(from: .now, by: 2)) { _ in
-        let overview = model.extensionVersionOverview(now: Date())
-        Button {
-          open(.extensionStatus)
-        } label: {
-          HStack {
-            Label {
-              Text(
-                "Pasu FS \(overview.app.description) · Extension \(overview.active) · \(overview.comparison)"
-              )
-              .foregroundStyle(.secondary)
-            } icon: {
-              Image(systemName: versionSymbol(overview.tone))
-                .foregroundStyle(versionColor(overview.tone))
-            }
-            Spacer()
-            RowChevron()
+      let overview = model.extensionVersionOverview(now: Date())
+      Button {
+        open(.extensionStatus)
+      } label: {
+        HStack {
+          Label {
+            Text(
+              "Pasu FS \(overview.app.description) · Extension \(overview.active) · \(overview.comparison)"
+            )
+            .foregroundStyle(.secondary)
+          } icon: {
+            Image(systemName: versionSymbol(overview.tone))
+              .foregroundStyle(versionColor(overview.tone))
           }
-          .contentShape(Rectangle())
+          Spacer()
+          RowChevron()
         }
-        .buttonStyle(.plain)
+        .contentShape(Rectangle())
       }
+      .buttonStyle(.plain)
     }
   }
 
@@ -180,6 +185,8 @@ struct OverviewView: View {
       model.isPresentingUninstall = true
     case .loginItems:
       model.openLoginItemsSettings()
+    case .showPolicy(let id):
+      model.selectedSection = .policy(id)
     }
   }
 
@@ -204,8 +211,21 @@ struct StatusHeader: View {
         Text(status.detail)
           .foregroundStyle(.secondary)
       }
+      if model.isRefreshingStatus {
+        Spacer()
+        RefreshProgress()
+      }
     }
     .accessibilityElement(children: .combine)
+  }
+}
+
+/// Shown while a Refresh command reads the status again.
+struct RefreshProgress: View {
+  var body: some View {
+    ProgressView()
+      .controlSize(.small)
+      .accessibilityLabel(Text("Refreshing"))
   }
 }
 
@@ -216,7 +236,9 @@ private struct EvidenceRow: View {
   var body: some View {
     LabeledContent {
       if let revision = model.activeRevisionFromHealth {
+        // On the content: on the row, the Label would also take this value.
         Text("Policy revision \(revision)")
+          .accessibilityRowValue(String(localized: "Policy revision \(revision)"))
       }
     } label: {
       Label {
@@ -255,7 +277,7 @@ struct RowChevron: View {
   }
 }
 
-private struct AttentionRow: View {
+struct AttentionRow: View {
   let item: AttentionItem
   let perform: (AttentionItem.Action) -> Void
 
@@ -286,6 +308,7 @@ private struct AttentionRow: View {
     case .generalSettings: String(localized: "Open Settings…")
     case .continueUninstall: String(localized: "Continue Uninstall…")
     case .loginItems: String(localized: "Open Login Items…")
+    case .showPolicy: String(localized: "Show Policy")
     }
   }
 }
@@ -306,8 +329,8 @@ struct PolicySummaryRow: View {
       }
       Spacer()
       VStack(alignment: .trailing) {
-        Text(verbatim: "\(policy.mode.displayName) · \(policy.policyType.displayName)")
-        Text(RuleCountText.summary(active: policy.activeRuleCount, total: policy.rules.count))
+        Text(policy.mode.displayName)
+        Text(RuleCountText.inUse(policy))
           .font(.caption)
           .foregroundStyle(.secondary)
       }
@@ -358,5 +381,19 @@ enum RuleCountText {
       return String(localized: "No rules")
     }
     return String(localized: "\(active) of \(total) rules on")
+  }
+
+  /// The rules a saved policy uses, per list. A policy that doesn't use Programs to Allow counts
+  /// only its block rules.
+  static func inUse(_ policy: DirectoryPolicy) -> String {
+    let counts = policy.rulesInUse
+    if policy.isBlacklistEnabled {
+      return counts.deny == 0
+        ? String(localized: "No rules") : String(localized: "Block \(counts.deny)")
+    }
+    if counts.allow == 0, counts.deny == 0 {
+      return String(localized: "No rules")
+    }
+    return String(localized: "Allow \(counts.allow) · Block \(counts.deny)")
   }
 }

@@ -37,7 +37,19 @@ do {
     "Usage: swift prepare_build.swift REPO CONFIG STAGE [BUILD_NUMBER]")
   let files = FileManager.default
   let root = URL(fileURLWithPath: arguments[1], isDirectory: true).standardizedFileURL
-  let configURL = URL(fileURLWithPath: arguments[2], relativeTo: root).standardizedFileURL
+  // The worktree whose .local/ keeps the build-number record. build_product.sh names the main
+  // worktree when it runs in a linked git worktree; otherwise it is the root itself.
+  let localRoot =
+    ProcessInfo.processInfo.environment["PASU_FS_LOCAL_ROOT"].flatMap {
+      $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true).standardizedFileURL
+    } ?? root
+  // A relative path names a file in the root or, when the root has no such file, in localRoot.
+  func localInput(_ path: String) -> URL {
+    let inRoot = URL(fileURLWithPath: path, relativeTo: root).standardizedFileURL
+    if path.hasPrefix("/") || files.fileExists(atPath: inRoot.path) { return inRoot }
+    return URL(fileURLWithPath: path, relativeTo: localRoot).standardizedFileURL
+  }
+  let configURL = localInput(arguments[2])
   let stage = URL(fileURLWithPath: arguments[3], isDirectory: true).standardizedFileURL
   try require(
     files.fileExists(atPath: configURL.path),
@@ -50,9 +62,7 @@ do {
       of: #"^[A-Za-z0-9][A-Za-z0-9-]*(\.[A-Za-z0-9][A-Za-z0-9-]*){2,}$"#,
       options: .regularExpression) != nil && identifier.count <= 180,
     "appBundleIdentifier must be a reverse-domain identifier, for example com.example.pasu.fs.")
-  func profileURL(_ path: String) -> URL {
-    URL(fileURLWithPath: path, relativeTo: root).standardizedFileURL
-  }
+  func profileURL(_ path: String) -> URL { localInput(path) }
   for path in [config.hostProfile, config.extensionProfile] {
     try require(
       files.isReadableFile(atPath: profileURL(path).path),
@@ -83,7 +93,8 @@ do {
   }
 
   // Reserve a number before compilation. Failed attempts do not reuse issued numbers.
-  let local = root.appendingPathComponent(".local", isDirectory: true)
+  // Every worktree of one repository shares the record and lock under localRoot.
+  let local = localRoot.appendingPathComponent(".local", isDirectory: true)
   try files.createDirectory(at: local, withIntermediateDirectories: true)
   let lock = open(
     local.appendingPathComponent("build-sequence.lock").path, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
@@ -91,13 +102,18 @@ do {
   defer { close(lock) }
   try require(flock(lock, LOCK_EX) == 0, "Cannot lock the build-number record.")
   defer { flock(lock, LOCK_UN) }
-  let record = local.appendingPathComponent("build-sequence.json")
-  let previous: Int
-  if files.fileExists(atPath: record.path) {
-    previous = try JSONDecoder().decode(BuildSequence.self, from: Data(contentsOf: record))
+  func lastIssued(in directory: URL) throws -> Int {
+    let file = directory.appendingPathComponent("build-sequence.json")
+    guard files.fileExists(atPath: file.path) else { return 0 }
+    return try JSONDecoder().decode(BuildSequence.self, from: Data(contentsOf: file))
       .lastIssuedBuildNumber
-  } else {
-    previous = 0
+  }
+  let record = local.appendingPathComponent("build-sequence.json")
+  var previous = try lastIssued(in: local)
+  let ownLocal = root.appendingPathComponent(".local", isDirectory: true)
+  if ownLocal.path != local.path {
+    // A record that an earlier build left in this worktree still counts, so numbers never go back.
+    previous = max(previous, try lastIssued(in: ownLocal))
   }
   let hostInfo = source.appendingPathComponent("Product/PasuFSHost-Info.plist")
   let extensionInfo = source.appendingPathComponent("Product/PasuFSSystemExtension-Info.plist")
