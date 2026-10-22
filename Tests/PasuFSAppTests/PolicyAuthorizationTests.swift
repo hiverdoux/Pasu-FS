@@ -149,7 +149,7 @@ final class PolicyAuthorizationTests: XCTestCase {
     XCTAssertEqual(
       model.activePolicy(id: policy.id)?.systemCompatibilityProfiles,
       try [container, xprotect].map {
-        try BuiltInSystemCompatibilityCatalog.catalog.policyEntry(profileIdentifier: $0)
+        try model.systemCompatibilityCatalog.policyEntry(profileIdentifier: $0)
       })
 
     // Turning a profile off and on again restores the saved policy exactly.
@@ -186,7 +186,7 @@ final class PolicyAuthorizationTests: XCTestCase {
     XCTAssertEqual(authorizer.weakeningFlags, [true])
     XCTAssertEqual(
       model.activePolicy(id: policy.id)?.systemCompatibilityProfiles,
-      [try BuiltInSystemCompatibilityCatalog.catalog.policyEntry(profileIdentifier: finderCopy)])
+      [try model.systemCompatibilityCatalog.policyEntry(profileIdentifier: finderCopy)])
     let applied = await runtime.applied
     XCTAssertEqual(applied.map(\.authorization), [FakePolicyChangeAuthorizer.token])
 
@@ -253,8 +253,21 @@ final class PolicyAuthorizationTests: XCTestCase {
   private func makeModel(
     _ policy: DirectoryPolicy, runtime: RecordingRuntime, authorizer: FakePolicyChangeAuthorizer
   ) -> AppModel {
-    AppModel(
+    // These tests exercise authorization, independently of the built-in profiles' OS support.
+    // A test-only copy makes the profiles available on the OS running the tests.
+    var catalog = BuiltInSystemCompatibilityCatalog.catalog
+    let major = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
+    let range = SystemCompatibilityOSRange(
+      minimum: SystemCompatibilityOSVersion(major: major),
+      maximumExclusive: SystemCompatibilityOSVersion(major: major + 1))
+    for profile in catalog.profiles.indices {
+      for actor in catalog.profiles[profile].actors.indices {
+        catalog.profiles[profile].actors[actor].supportedOSRange = range
+      }
+    }
+    return AppModel(
       initialPolicySet: PolicySetDocument(setIdentifier: UUID(), revision: 3, policies: [policy]),
+      systemCompatibilityCatalog: catalog,
       activationController: EmptyLifecycle(), runtimeController: runtime,
       policyChangeAuthorizer: authorizer)
   }
