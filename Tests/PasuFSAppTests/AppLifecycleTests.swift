@@ -1181,7 +1181,7 @@ private final class FakeExtensionLifecycleController: ExtensionLifecycleControll
   }
 
   func propertiesEvents() -> AsyncStream<ActivationEvent> {
-    let properties = lock.withLock { properties }
+    let properties = lock.withLock { self.properties }
     return AsyncStream { continuation in
       continuation.yield(.properties(properties))
       continuation.finish()
