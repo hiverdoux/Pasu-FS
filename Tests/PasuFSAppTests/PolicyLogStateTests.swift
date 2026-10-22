@@ -7,6 +7,56 @@ import XCTest
 
 @MainActor
 final class PolicyLogStateTests: XCTestCase {
+  func testRowsKeepAllRecordsForBlankSearchAndRespectSortOrder() {
+    let state = PolicyLogState(key: .init(setIdentifier: UUID(), policyIdentifier: UUID()))
+    let first = AuditEventRecord(
+      timestamp: Date(timeIntervalSince1970: 1), eventType: "AUTH_OPEN",
+      policyDecision: "allowed", kernelResponse: "allow")
+    let second = AuditEventRecord(
+      timestamp: first.timestamp, eventType: "AUTH_OPEN",
+      policyDecision: "allowed", kernelResponse: "allow")
+    let newest = AuditEventRecord(
+      timestamp: Date(timeIntervalSince1970: 2), eventType: "AUTH_OPEN",
+      policyDecision: "allowed", kernelResponse: "allow")
+    state.batch = AuditLogBatch(records: [first, second, newest])
+
+    for query in ["", " \n\t "] {
+      state.filterText = query
+      XCTAssertEqual(state.rows.map(\.id), [newest.id, second.id, first.id])
+    }
+    state.sortOrder = [KeyPathComparator(\PolicyLogRow.timestamp, order: .forward)]
+    XCTAssertEqual(state.rows.map(\.id), [second.id, first.id, newest.id])
+  }
+
+  func testRowsSearchSelectedPolicyFieldsWithWhitespaceAndCaseFolding() {
+    let policyID = UUID()
+    let state = PolicyLogState(key: .init(setIdentifier: UUID(), policyIdentifier: policyID))
+    let selected = PolicyEvaluationRecord(
+      policyIdentifier: policyID, policyName: "Sample Policy", mode: .protection,
+      policyType: .whitelist, match: .direct, ruleIdentifier: "sample-rule", decision: .allow)
+    let other = PolicyEvaluationRecord(
+      policyIdentifier: UUID(), policyName: "Other Policy", mode: .protection,
+      policyType: .whitelist, match: .direct, ruleIdentifier: "other-rule", decision: .allow)
+    let record = AuditEventRecord(
+      eventType: "AUTH_OPEN", teamIdentifier: "SAMPLETEAM",
+      signingIdentifier: "com.example.reader", targetPath: "/example/sample.txt",
+      policyDecision: "allowed", kernelResponse: "allow", policyEvaluations: [other, selected])
+    let missingFields = AuditEventRecord(
+      eventType: "AUTH_OPEN", policyDecision: "allowed", kernelResponse: "allow")
+    state.batch = AuditLogBatch(records: [record, missingFields])
+
+    for query in [
+      " SAMPLE-RULE \n", "sample policy", "sampleteam", "COM.EXAMPLE.READER", "sample.txt",
+    ] {
+      state.filterText = query
+      XCTAssertEqual(state.rows.map(\.id), [record.id], query)
+    }
+    for query in ["other-rule", "Other Policy", "no-match"] {
+      state.filterText = query
+      XCTAssertTrue(state.rows.isEmpty, query)
+    }
+  }
+
   func testNoticesKeepEachCurrentIssueAndPrioritizeRefreshFailure() {
     let state = PolicyLogState(key: .init(setIdentifier: UUID(), policyIdentifier: UUID()))
     state.hasLoaded = true

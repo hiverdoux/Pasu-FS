@@ -47,22 +47,25 @@ final class PolicyLogState {
 
   var rows: [PolicyLogRow] {
     let needle = filterText.trimmingCharacters(in: .whitespacesAndNewlines)
-    return batch.records.reversed().map(PolicyLogRow.init).filter { row in
+    let rows: [PolicyLogRow] = batch.records.reversed().map { PolicyLogRow(record: $0) }
+    let matchingRows = rows.filter { row in
       guard !needle.isEmpty else { return true }
       let evaluation = row.record.evaluation(for: key.policyIdentifier)
       let origin = evaluation?.executionOrigin
-      return
-        ([
-          row.process, row.target, row.decision, row.response,
-          row.record.signingIdentifier ?? "", row.record.teamIdentifier ?? "",
-          evaluation?.policyName ?? "", evaluation?.ruleIdentifier ?? "",
-          evaluation?.match.rawValue ?? "",
-          evaluation.flatMap(DecisionReasonText.summary) ?? "",
-          origin?.origin?.executablePath ?? "", origin?.origin?.signingIdentifier ?? "",
-          origin?.deniedProgram?.executablePath ?? "",
-          origin?.deniedProgram?.signingIdentifier ?? "",
-        ] + row.record.lineageSearchValues).contains { $0.localizedCaseInsensitiveContains(needle) }
-    }.sorted(using: sortOrder)
+      let searchValues: [String] = [
+        row.process, row.target, row.decision, row.response,
+        row.record.signingIdentifier ?? "", row.record.teamIdentifier ?? "",
+        evaluation?.policyName ?? "", evaluation?.ruleIdentifier ?? "",
+        evaluation?.match.rawValue ?? "",
+        evaluation.flatMap(DecisionReasonText.summary) ?? "",
+        origin?.origin?.executablePath ?? "", origin?.origin?.signingIdentifier ?? "",
+        origin?.deniedProgram?.executablePath ?? "",
+        origin?.deniedProgram?.signingIdentifier ?? "",
+      ]
+      let allSearchValues = searchValues + row.record.lineageSearchValues
+      return allSearchValues.contains { $0.localizedCaseInsensitiveContains(needle) }
+    }
+    return matchingRows.sorted(using: sortOrder)
   }
 
   var notices: [PolicyLogNotice] {
