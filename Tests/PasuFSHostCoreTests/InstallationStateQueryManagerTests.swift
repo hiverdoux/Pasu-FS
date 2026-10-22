@@ -96,7 +96,7 @@ final class InstallationStateQueryManagerTests: XCTestCase {
   /// manager ended left none.
   func testAnswerThatArrivesAtTheTimeoutIsKept() async {
     let launcher = ScriptedChildLauncher(
-      endings: [.report(.reported([installed]), delay: .milliseconds(100), ignoresKill: true)])
+      endings: [.reportAtKill(.reported([installed]))])
     let manager = InstallationStateQueryManager(launcher: launcher, timeout: 0.05)
 
     let outcome = await manager.query(.refresh)
@@ -281,9 +281,10 @@ private final class TestClock: @unchecked Sendable {
 /// Starts children that end as the test scripted, one ending per launch in order.
 private final class ScriptedChildLauncher: InstallationStateChildLaunching, @unchecked Sendable {
   enum Ending {
-    /// Exits with the report's output and status, after the delay. With `ignoresKill`, it
-    /// exits on its own even when killed meanwhile.
-    case report(InstallationStateReport, delay: Duration = .zero, ignoresKill: Bool = false)
+    /// Exits with the report's output and status, after the delay.
+    case report(InstallationStateReport, delay: Duration = .zero)
+    /// Returns a normal report when termination is requested, modeling an exit at the timeout.
+    case reportAtKill(InstallationStateReport)
     case output(String, status: Int32)
     case signal(Int32)
     case truncated
@@ -339,7 +340,7 @@ private final class ScriptedChild: InstallationStateChild, @unchecked Sendable {
     self.ending = ending
     self.launcher = launcher
     switch ending {
-    case .report(let report, let delay, _):
+    case .report(let report, let delay):
       endLater(
         after: delay,
         InstallationStateChildTermination(
@@ -354,7 +355,7 @@ private final class ScriptedChild: InstallationStateChild, @unchecked Sendable {
         InstallationStateChildTermination(
           reason: .exited(0), standardOutput: InstallationStateReport.reported([]).encoded(),
           outputWasTruncated: true))
-    case .never, .endsAfterKill, .launchFailure:
+    case .never, .endsAfterKill, .reportAtKill, .launchFailure:
       break
     }
   }
@@ -362,7 +363,7 @@ private final class ScriptedChild: InstallationStateChild, @unchecked Sendable {
   func waitForTermination() async -> InstallationStateChildTermination {
     await withCheckedContinuation { continuation in
       let termination = lock.withLock { () -> InstallationStateChildTermination? in
-        if let termination { return termination }
+        if let termination = self.termination { return termination }
         waiters.append(continuation)
         return nil
       }
@@ -377,8 +378,10 @@ private final class ScriptedChild: InstallationStateChild, @unchecked Sendable {
     let killed = InstallationStateChildTermination(
       reason: .signaled(SIGKILL), standardOutput: Data())
     switch ending {
-    case .report(_, _, ignoresKill: true):
-      break
+    case .reportAtKill(let report):
+      end(
+        InstallationStateChildTermination(
+          reason: .exited(report.exitStatus), standardOutput: report.encoded()))
     case .endsAfterKill(let delay):
       endLater(after: delay, killed)
     default:
